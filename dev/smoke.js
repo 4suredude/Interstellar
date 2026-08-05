@@ -33,8 +33,8 @@ const SIM = require(path.join(ROOT, 'sim.js'));
 
   SIM.addBots(W, 10);
   assert(W.ships.length === 10, 'ten bots spawned');
-  assert(Object.keys(SIM.SHIP_TYPES).length === 12, '8 classic + 4 NOVA hulls exist');
-  for (const key of ['warbird', 'javelin', 'spider', 'leviathan', 'terrier', 'weasel', 'lancaster', 'shark',
+  assert(Object.keys(SIM.SHIP_TYPES).length === 12, '8 fleet + 4 NOVA hulls exist');
+  for (const key of ['corsair', 'meteor', 'hornet', 'titan', 'comet', 'dagger', 'paladin', 'warden',
     'vanguard', 'aegis', 'reaper', 'phantom'])
     assert(SIM.SHIP_TYPES[key], 'ship type ' + key + ' exists');
 
@@ -45,7 +45,7 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     assert(van.multi && van.bounceBullets, 'vanguard ships factory multifire + ricochet');
 
     const aeg = SIM.makeShip(Wm, 'aegis', 'local', 'Aeg', 215);
-    const wb = SIM.makeShip(Wm, 'warbird', 'local', 'Wb', 190);
+    const wb = SIM.makeShip(Wm, 'corsair', 'local', 'Wb', 190);
     aeg.x = wb.x = 500; aeg.y = wb.y = 500;
     const e0 = aeg.energy;
     SIM.damageShip(Wm, aeg, 1000, wb);
@@ -72,7 +72,7 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     assert(evs.some(e => e.e === 'hit' && typeof e.att === 'number'), 'hit events carry attacker id');
   }
 
-  const me = SIM.makeShip(W, 'warbird', 'local', 'Tester', 190);
+  const me = SIM.makeShip(W, 'corsair', 'local', 'Tester', 190);
   SIM.spawnShip(W, me);
   SIM.drainEvents(W);
 
@@ -97,7 +97,7 @@ const SIM = require(path.join(ROOT, 'sim.js'));
   assert(deaths > 0, 'deaths occurred: ' + deaths);
 
   // remote ghost mechanics
-  const ghost = SIM.makeShip(W, 'weasel', 'remote', 'Ghost', 60);
+  const ghost = SIM.makeShip(W, 'dagger', 'remote', 'Ghost', 60);
   ghost.netX = 500; ghost.netY = 500; ghost.netVx = 0; ghost.netVy = 0; ghost.netFrac = 1;
   ghost.x = 400; ghost.y = 400;
   for (let i = 0; i < 120; i++) SIM.updateWorld(W, SIM.STEP);
@@ -165,8 +165,8 @@ const SIM = require(path.join(ROOT, 'sim.js'));
   for (let i = 0; i < 240; i++) update(STEP);
   render();
 
-  const p = startSolo('leviathan');
-  assert(G.state === 'play' && !p.remote && p.type === 'leviathan', 'solo game started in a leviathan');
+  const p = startSolo('titan');
+  assert(G.state === 'play' && !p.remote && p.type === 'titan', 'solo game started in a titan');
   api.keys.KeyW = true; api.keys.Space = true;
   let sawMsg = false;
   for (let i = 0; i < 30 * 60; i++) {
@@ -180,10 +180,10 @@ const SIM = require(path.join(ROOT, 'sim.js'));
 
   // fake a server welcome to exercise the online path (no real socket)
   G.net = { readyState: 1, send() { }, close() { } };
-  G.online = true; G.name = 'Tester'; G.pendingShip = 'spider';
+  G.online = true; G.name = 'Tester'; G.pendingShip = 'hornet';
   api.handleNet({
     t: 'welcome', id: 501, hue: 8, seed: 777,
-    roster: [{ id: 400, name: 'RemoteBot', ship: 'shark', hue: 100, bot: 1, kills: 0, deaths: 0, score: 0, x: 1000, y: 1000 }],
+    roster: [{ id: 400, name: 'RemoteBot', ship: 'warden', hue: 100, bot: 1, kills: 0, deaths: 0, score: 0, x: 1000, y: 1000 }],
     prizes: [[9, 800, 800]],
   });
   assert(G.player && G.player.id === 501, 'online welcome created player');
@@ -241,10 +241,10 @@ const SIM = require(path.join(ROOT, 'sim.js'));
         setTimeout(() => reject(new Error('welcome timeout for ' + name)), 4000);
       });
     }
-    const A = await client('Alice', 'warbird');
+    const A = await client('Alice', 'corsair');
     assert(A.welcome.id > 0 && Number.isFinite(A.welcome.seed), 'A got welcome with id+seed');
     assert(A.welcome.roster.length === 4, 'A sees 4 bots in roster');
-    const B = await client('Bob', 'shark');
+    const B = await client('Bob', 'warden');
     assert(B.welcome.roster.some(r => r.name === 'Alice'), 'B sees Alice in roster');
 
     // A should be told about B joining

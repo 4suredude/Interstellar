@@ -1,7 +1,7 @@
 /* =========================================================================
    INTERSTELLAR — browser client
-   Rendering (neon + bloom), input, menus, audio, and SubSpace-style
-   relay netcode. All world simulation lives in sim.js (shared with the
+   Rendering (sprites + bloom), input, menus, audio, and the relay
+   netcode client. All world simulation lives in sim.js (shared with the
    server); this file owns everything the player sees and hears.
    ========================================================================= */
 (function () {
@@ -675,9 +675,8 @@
   }
 
   // ---------------------------------------------------------------- ship art
-  // Honors the original Continuum look: ships are solid, metallic, shaded
-  // craft lit from the screen's top-left, rendered through a 36-frame
-  // rotation atlas — exactly how the original's pre-rendered sprites felt.
+  // Ships are solid, metallic, shaded craft lit from the screen's top-left,
+  // rendered through a 36-frame rotation atlas for a crisp baked-sprite feel.
   const ROT_FRAMES = 36;
 
   function tracePolyOn(g, pts, r) {
@@ -902,7 +901,7 @@
   }
 
   // ---------------------------------------------------------------- world render
-  // original SubSpace level colors: L1 red-orange, L2 yellow, L3 blue
+  // weapon level colors: L1 red-orange, L2 yellow, L3 blue
   const BULLET_HUES = { 1: 18, 2: 52, 3: 205 };
   const BOMB_HUES = { 1: 4, 2: 52, 3: 210 };
   function drawWorld() {
@@ -1168,7 +1167,7 @@
         ctx.fillStyle = (G.time * 4 | 0) % 2 ? '#fff' : '#8ef';
         ctx.fillRect(rx + s.x * k - 2, ry + s.y * k - 2, 4, 4);
       } else {
-        if (s.t.stealth) continue; // weasels don't paint on radar
+        if (s.t.stealth) continue; // daggers don't paint on radar
         ctx.fillStyle = 'rgba(255,120,90,0.9)';
         ctx.fillRect(rx + s.x * k - 1.5, ry + s.y * k - 1.5, 3, 3);
       }
@@ -1202,7 +1201,6 @@
     ctx.shadowColor = 'rgba(255,180,80,0.8)';
     txt('T O P - D O W N   S P A C E   C O M B A T', vw / 2, vh / 2 - 26, 16, '#ffd9a0', 'center', 700);
     ctx.restore();
-    txt('inspired by the classic SubSpace / Continuum', vw / 2, vh / 2 + 8, 13, '#7a8ca8', 'center');
     const blink = Math.sin(G.time * 4) > -0.3;
     if (blink) txt('ENTER — fly solo vs bots', vw / 2, vh / 2 + 66, 20, '#cff', 'center', 700);
     txt('O — online multiplayer', vw / 2, vh / 2 + 98, 17, '#8fd4a8', 'center', 700);
@@ -1250,7 +1248,7 @@
 
     const t = SHIP_TYPES[SHIP_ORDER[G.sel]];
     const isNova = t.cls === 'nova';
-    txt(isNova ? 'NOVA CLASS — NEW GENERATION' : 'CLASSIC HULL', vw / 2, cy + 88, 11,
+    txt(isNova ? 'NOVA CLASS — NEW GENERATION' : 'FLEET CLASS', vw / 2, cy + 88, 11,
       isNova ? '#fd8' : '#68a', 'center', 700);
     txt(t.label.toUpperCase(), vw / 2, cy + 116, 30, 'hsla(' + t.hue + ',90%,68%,1)', 'center', 800);
     txt((G.sel + 1) + ' / ' + n, vw / 2, cy + 136, 12, '#678', 'center');

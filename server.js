@@ -4,7 +4,7 @@
    Zero-dependency Node server: static file host + hand-rolled RFC 6455
    WebSocket endpoint on ONE port, running the shared sim for the bots.
 
-   Netcode is SubSpace-style relay: each client owns its own ship
+   Netcode is an owner-trusting relay: each client owns its own ship
    (position, energy, death) and the server relays state, fire events,
    kills, chat and scores. The server authoritatively runs bots + prizes.
 

@@ -3,7 +3,7 @@
    Runs identically in the browser (window.SIM) and Node (module.exports).
    No DOM, no audio, no rendering — pure world state + events.
 
-   Netcode model (SubSpace-style relay):
+   Netcode model (owner-trusting relay):
    - Each peer fully simulates its LOCAL ships (the player on a client,
      the bots on the server). Remote ships are "ghosts": position-driven
      from network state, never damaged locally, but targetable/collidable.
@@ -42,14 +42,14 @@
   }
 
   // ------------------------------------------------------------ ship types
-  // Full classic SubSpace roster. Visual fields (shape/accent/deco/cockpit/
+  // The Interstellar fleet. Visual fields (shape/accent/deco/cockpit/
   // engines) are unit-space polygons scaled by radius at draw time, nose +x.
-  const SHIP_ORDER = ['warbird', 'javelin', 'spider', 'leviathan', 'terrier', 'weasel', 'lancaster', 'shark',
+  const SHIP_ORDER = ['corsair', 'meteor', 'hornet', 'titan', 'comet', 'dagger', 'paladin', 'warden',
     'vanguard', 'aegis', 'reaper', 'phantom'];
   const SHIP_TYPES = {
-    warbird: {
-      label: 'Warbird', hue: 192,
-      desc: 'The classic duelist. Heavy single shots — one clean hit swings a fight.',
+    corsair: {
+      label: 'Corsair', hue: 192,
+      desc: 'The duelist. Heavy single shots — one clean hit swings a fight.',
       maxEnergy: 1500, recharge: 105, thrust: 235, maxSpeed: 350, turn: 3.4,
       radius: 11, bounce: 0.6,
       gunLevel: 2, gunDelay: 0.55, gunCost: 150, gunSpeed: 680, gunDmgMul: 1.15,
@@ -59,8 +59,8 @@
       deco: [[[0.25, 0.42], [-0.42, 0.8]], [[0.25, -0.42], [-0.42, -0.8]]],
       cockpit: [0.38, 0, 0.2, 0.13], engines: [[-0.4, 0]],
     },
-    javelin: {
-      label: 'Javelin', hue: 18,
+    meteor: {
+      label: 'Meteor', hue: 18,
       desc: 'Bomber. Splash artillery with bouncing bombs that clear whole corridors.',
       maxEnergy: 1700, recharge: 95, thrust: 200, maxSpeed: 310, turn: 3.0,
       radius: 12, bounce: 0.5,
@@ -71,8 +71,8 @@
       deco: [[[0.1, 0.5], [-0.35, 0.9]], [[0.1, -0.5], [-0.35, -0.9]]],
       cockpit: [0.32, 0, 0.19, 0.13], engines: [[-0.62, 0.3], [-0.62, -0.3]],
     },
-    spider: {
-      label: 'Spider', hue: 130,
+    hornet: {
+      label: 'Hornet', hue: 130,
       desc: 'Bullet hose. Weak pellets, relentless rate of fire, monster recharge.',
       maxEnergy: 1400, recharge: 135, thrust: 215, maxSpeed: 330, turn: 3.6,
       radius: 11, bounce: 0.55,
@@ -83,8 +83,8 @@
       deco: [[[0.3, 0.55], [-0.1, 0.95]], [[0.3, -0.55], [-0.1, -0.95]], [[-0.2, 0.7], [-0.6, 0.72]], [[-0.2, -0.7], [-0.6, -0.72]]],
       cockpit: [0.3, 0, 0.17, 0.14], engines: [[-0.55, 0.36], [-0.55, -0.36]],
     },
-    leviathan: {
-      label: 'Leviathan', hue: 355,
+    titan: {
+      label: 'Titan', hue: 355,
       desc: 'The dreadnought. Glacial, colossal energy, level-3 bombs that erase rooms.',
       maxEnergy: 2600, recharge: 70, thrust: 125, maxSpeed: 240, turn: 2.1,
       radius: 15, bounce: 0.4,
@@ -95,8 +95,8 @@
       deco: [[[0.3, 0.72], [-0.7, 0.72]], [[0.3, -0.72], [-0.7, -0.72]], [[-0.2, 0.45], [-0.2, -0.45]]],
       cockpit: [0.35, 0, 0.24, 0.19], engines: [[-0.92, 0.28], [-0.92, -0.28]],
     },
-    terrier: {
-      label: 'Terrier', hue: 282,
+    comet: {
+      label: 'Comet', hue: 282,
       desc: 'Interceptor. Fastest hull in the zone — hit, run, and never stop moving.',
       maxEnergy: 1250, recharge: 120, thrust: 285, maxSpeed: 410, turn: 4.3,
       radius: 10, bounce: 0.65,
@@ -107,8 +107,8 @@
       deco: [[[-0.05, 0.5], [-0.75, 0.72]], [[-0.05, -0.5], [-0.75, -0.72]]],
       cockpit: [0.32, 0, 0.18, 0.11], engines: [[-0.55, 0]],
     },
-    weasel: {
-      label: 'Weasel', hue: 55,
+    dagger: {
+      label: 'Dagger', hue: 55,
       desc: 'Assassin. Tiny, half-invisible, off enemy radar. Fragile as glass.',
       maxEnergy: 1000, recharge: 130, thrust: 300, maxSpeed: 430, turn: 4.8,
       radius: 8, bounce: 0.7, stealth: true,
@@ -119,9 +119,9 @@
       deco: [[[0.1, 0.28], [-0.55, 0.28]], [[0.1, -0.28], [-0.55, -0.28]]],
       cockpit: [0.25, 0, 0.15, 0.1], engines: [[-0.55, 0]],
     },
-    lancaster: {
-      label: 'Lancaster', hue: 210,
-      desc: 'The all-rounder. Batwing hull, dependable guns, no bad matchups.',
+    paladin: {
+      label: 'Paladin', hue: 210,
+      desc: 'The all-rounder. Broad wings, dependable guns, no bad matchups.',
       maxEnergy: 1600, recharge: 115, thrust: 225, maxSpeed: 340, turn: 3.2,
       radius: 12, bounce: 0.55,
       gunLevel: 2, gunDelay: 0.42, gunCost: 110, gunSpeed: 640, gunDmgMul: 1.0,
@@ -131,8 +131,8 @@
       deco: [[[0.4, 0.6], [-0.5, 0.6]], [[0.4, -0.6], [-0.5, -0.6]]],
       cockpit: [0.28, 0, 0.19, 0.15], engines: [[-0.75, 0]],
     },
-    shark: {
-      label: 'Shark', hue: 165,
+    warden: {
+      label: 'Warden', hue: 165,
       desc: 'Support hunter. Carries a rack of self-restocking repels and mean bombs.',
       maxEnergy: 1450, recharge: 110, thrust: 240, maxSpeed: 345, turn: 3.5,
       radius: 11, bounce: 0.6, repelStart: 3, repelCap: 4, repelRegen: 18,
@@ -784,7 +784,7 @@
     if (s.safe > 0) s.safe -= dt;
     if (s.flash > 0) s.flash -= dt;
 
-    // shark repel rack regen
+    // warden repel rack regen
     if (s.t.repelRegen) {
       s.regenT += dt;
       if (s.regenT >= s.t.repelRegen) {

@@ -1,11 +1,10 @@
 # Interstellar
 
-**Interstellar** is a modern, from-scratch top-down space combat game for the
-browser — inertial flight, energy warfare, and zone chat, inspired by the
-classic **SubSpace / Continuum** but very much its own game: sprite-shaded
-ships with bloom and particles, synthesized audio, a **12-ship hangar**
-(8 classic-style hulls plus the new NOVA class), and **real online
-multiplayer** via a zero-dependency Node server.
+**Interstellar** is a top-down space combat game for the browser — inertial
+flight, energy warfare, and zone chat, built from scratch with no engine and
+no dependencies: sprite-shaded ships with bloom and particles, synthesized
+audio, a **12-ship hangar** (the 8 fleet hulls plus the NOVA class), and
+**real online multiplayer** via a zero-dependency Node server.
 
 ![Combat](assets/combat.png)
 
@@ -25,29 +24,28 @@ Pick a callsign and a ship, and you're all in the same zone together with the
 server's bots. `PORT=9000 BOTS=4 node server.js` to customize. A different
 server can be targeted with `?server=host:port` in the URL.
 
-The netcode is SubSpace-style relay, like the original: each client owns its
-ship, the server authoritatively runs bots and prizes and relays state, fire
-events, kills, scores, and chat (**Enter** to talk) at 15–20 Hz with
-dead-reckoning interpolation for remote ships. Both sides run the same
-simulation code (`sim.js`) on the same map seed.
+The netcode is an owner-trusting relay: each client owns its ship, the
+server authoritatively runs bots and prizes and relays state, fire events,
+kills, scores, and chat (**Enter** to talk) at 15–20 Hz with dead-reckoning
+interpolation for remote ships. Both sides run the same simulation code
+(`sim.js`) on the same map seed.
 
-## The hangar — 8 classic hulls + the new NOVA class
+## The hangar — 8 fleet hulls + the NOVA class
 
 ![Ship select](assets/select.png)
 
 | Ship | Character |
 | --- | --- |
-| **Warbird** | The classic duelist — heavy single shots |
-| **Javelin** | Bomber with bouncing splash artillery |
-| **Spider** | Rapid-fire bullet hose, monster recharge |
-| **Leviathan** | Slow dreadnought, colossal energy, L3 bombs |
-| **Terrier** | Fastest interceptor in the zone |
-| **Weasel** | Tiny assassin — off enemy radar, dim to the eye |
-| **Lancaster** | Batwing all-rounder with dependable guns |
-| **Shark** | Support hunter with a self-restocking repel rack |
+| **Corsair** | The duelist — heavy single shots |
+| **Meteor** | Bomber with bouncing splash artillery |
+| **Hornet** | Rapid-fire bullet hose, monster recharge |
+| **Titan** | Slow dreadnought, colossal energy, L3 bombs |
+| **Comet** | Fastest interceptor in the zone |
+| **Dagger** | Tiny assassin — off enemy radar, dim to the eye |
+| **Paladin** | Broad-winged all-rounder with dependable guns |
+| **Warden** | Support hunter with a self-restocking repel rack |
 
-Because this is the next iteration of the zone, a new generation of hulls
-joins the classic eight — each with a mechanic the originals never had:
+A new generation of hulls joins the fleet — each with a mechanic all its own:
 
 | NOVA ship | New mechanic |
 | --- | --- |
@@ -56,32 +54,33 @@ joins the classic eight — each with a mechanic the originals never had:
 | **Reaper** | Leeches 30% of the damage it deals back as energy |
 | **Phantom** | Blink drive: `R` teleports 240m forward — straight through walls |
 
-## What's faithful to SubSpace
+## The combat system
 
 - **Inertial flight** — no friction, no brakes; ships ricochet off walls.
 - **Energy warfare** — one bar is shields *and* ammo; a hit that lands with
   nothing left kills you.
 - **Leveled weapons** — L1–L3 color-coded bullets and bombs with splash,
-  knockback, proximity fuses, wall bounces, and traditional self-damage.
+  knockback, proximity fuses, wall bounces — and your own bombs hurt you.
 - **Greens** — anonymous prize boxes: gun/bomb upgrades, MultiFire, bouncing
   bullets, repels, bursts, rockets, energy/recharge/thrust/speed boosts.
 - **Repel / Burst / Rocket** specials, corner radar, green kill-feed chat,
-  bounty, and full loadout reset on death.
+  bounty, and full loadout reset on death — dying costs you everything you
+  collected, which is exactly why it matters.
 
-## The look — honoring the original, then modernizing it
+## The look
 
 ![Online multiplayer](assets/online.png)
 
 - Ships are **solid, metallic, shaded craft** rendered through **36-frame
-  rotation sprite atlases with fixed top-left lighting** — the same
-  pre-rendered-sprite feel (and rotation snap) the original had, drawn
+  rotation sprite atlases with fixed top-left lighting** — a crisp
+  pre-rendered-sprite feel with baked lighting and rotation snap, drawn
   procedurally with hull plates, team-color accents, panel seams, engine
   nozzles, and cockpit glass with specular glints.
 - Maps are **solid chunky bevelled tiles** with per-tile tonal variation and
   rock speckle, edged with a faint energized rim — steel and stone, not
   wireframe.
-- Bullets and bombs use the original's **level colors** (L1 red-orange,
-  L2 yellow, L3 blue); space is near-black with a whisper of nebula.
+- Bullets and bombs wear their **level colors** (L1 red-orange, L2 yellow,
+  L3 blue); space is near-black with a whisper of nebula.
 - On top of that, the modern layer: subtle bloom post-processing, engine
   flames with white-hot cores, motion trails, debris and shockwave
   explosions, muzzle flashes, hex spawn shields, blink warp effects, and
@@ -125,7 +124,7 @@ node dev/smoke.js         # run all three test layers
 
 ## Roadmap ideas
 
-- Mines, decoys, portals, and thors
-- Team frequencies, flag and powerball (soccer) modes
-- Server-side anti-cheat validation (the relay model trusts clients, as the original did)
+- Mines, decoys, and portals
+- Teams, flag capture, and ball-game modes
+- Server-side anti-cheat validation (the relay model trusts clients)
 - Gamepad and touch controls
