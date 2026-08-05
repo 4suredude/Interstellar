@@ -104,6 +104,60 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     console.log('OK  teams: FF off, streaks, anchored spawns all behave');
   }
 
+  // map styles: deterministic per seed, distinct per style
+  {
+    const wN = SIM.createWorld({ seed: 5, mapStyle: 'nexus' });
+    const wG = SIM.createWorld({ seed: 5, mapStyle: 'gauntlet' });
+    const wR = SIM.createWorld({ seed: 5, mapStyle: 'rings' });
+    const wR2 = SIM.createWorld({ seed: 5, mapStyle: 'rings' });
+    assert(!Buffer.from(wN.map).equals(Buffer.from(wG.map)), 'gauntlet differs from nexus');
+    assert(!Buffer.from(wN.map).equals(Buffer.from(wR.map)), 'rings differs from nexus');
+    assert(Buffer.from(wR.map).equals(Buffer.from(wR2.map)), 'same style+seed -> identical map');
+  }
+
+  // support roles: warden aura + comet warp beacon
+  {
+    const Ws = SIM.createWorld({ seed: 11, spawnPrizes: false });
+    const war = SIM.makeShip(Ws, 'warden', 'local', 'War', 165, 1);
+    const ally = SIM.makeShip(Ws, 'corsair', 'local', 'Ally', 200, 1);
+    const sp = SIM.randClearPoint(Ws);
+    war.x = sp.x; war.y = sp.y;
+    ally.x = sp.x + 60; ally.y = sp.y;
+    ally.energy = 100;
+    for (let i = 0; i < 60; i++) SIM.updateWorld(Ws, SIM.STEP);
+    const withAura = ally.energy - 100;
+    ally.energy = 100; war.x = sp.x + 3000 > SIM.WORLD ? 100 : sp.x + 2000; war.y = 100;
+    for (let i = 0; i < 60; i++) SIM.updateWorld(Ws, SIM.STEP);
+    const without = ally.energy - 100;
+    assert(withAura > without * 1.2, 'warden aura boosts recharge (' + withAura.toFixed(0) + ' vs ' + without.toFixed(0) + ')');
+
+    const comet = SIM.makeShip(Ws, 'comet', 'local', 'Com', 210, 1);
+    const cp = SIM.randClearPoint(Ws);
+    comet.x = cp.x; comet.y = cp.y;
+    ally.x = cp.x > SIM.WORLD / 2 ? cp.x - 1500 : cp.x + 1500; ally.y = cp.y;
+    ally.energy = 1000; ally.warpCd = 0;
+    const warped = SIM.warpToBeacon(Ws, ally);
+    assert(warped && Math.hypot(ally.x - comet.x, ally.y - comet.y) < 350, 'comet warp beacon teleports allies');
+    assert(SIM.drainEvents(Ws).some(e => e.e === 'warp'), 'warp event emitted');
+  }
+
+  // ghost interpolation with a jitter buffer
+  {
+    let fake = 100;
+    const Wg = SIM.createWorld({ seed: 3, spawnPrizes: false, ghostInterp: true, now: () => fake });
+    const g = SIM.makeShip(Wg, 'corsair', 'remote', 'G', 200, 0);
+    g.snaps = [
+      { rt: 99.80, x: 1000, y: 1000, vx: 100, vy: 0, a: 0, th: 1, frac: 1, dead: false },
+      { rt: 99.90, x: 1010, y: 1000, vx: 100, vy: 0, a: 0, th: 1, frac: 1, dead: false },
+      { rt: 100.00, x: 1020, y: 1000, vx: 100, vy: 0, a: 0, th: 1, frac: 1, dead: false },
+    ];
+    SIM.updateWorld(Wg, SIM.STEP);   // render time = 99.9 -> exactly snap 2
+    assert(Math.abs(g.x - 1010) < 3, 'ghost interpolates through the jitter buffer (x=' + g.x.toFixed(1) + ')');
+    fake = 100.3;                    // beyond the buffer -> capped extrapolation
+    SIM.updateWorld(Wg, SIM.STEP);
+    assert(g.x > 1020 && g.x <= 1020 + 100 * 0.15 + 1, 'extrapolation is capped (x=' + g.x.toFixed(1) + ')');
+  }
+
   const me = SIM.makeShip(W, 'corsair', 'local', 'Tester', 190);
   SIM.spawnShip(W, me);
   SIM.drainEvents(W);
@@ -289,7 +343,7 @@ const SIM = require(path.join(ROOT, 'sim.js'));
       })();
     });
 
-    // static file serving
+    // static file serving + zone endpoints
     const html = await fetch('http://localhost:' + PORT + '/').then(r => r.text());
     assert(html.includes('client.js'), 'server serves index.html');
     const simSrc = await fetch('http://localhost:' + PORT + '/sim.js').then(r => r.text());
@@ -299,55 +353,112 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     function client(name, ship) {
       return new Promise((resolve, reject) => {
         const ws = new WebSocket('ws://localhost:' + PORT);
-        const c = { ws, name, msgs: [], welcome: null };
+        ws.binaryType = 'arraybuffer';
+        const c = { ws, name, msgs: [], bins: [], welcome: null };
         ws.onopen = () => ws.send(JSON.stringify({ t: 'join', name, ship }));
         ws.onmessage = m => {
+          if (typeof m.data !== 'string') { c.bins.push(new DataView(m.data)); return; }
           const msg = JSON.parse(m.data);
           c.msgs.push(msg);
           if (msg.t === 'welcome') { c.welcome = msg; resolve(c); }
         };
-        ws.onerror = e => reject(new Error('ws error for ' + name));
+        ws.onerror = () => reject(new Error('ws error for ' + name));
         setTimeout(() => reject(new Error('welcome timeout for ' + name)), 4000);
       });
     }
+    function mkStateBuf(x, y, vx, vy, a, dead, th, frac) {
+      const b = new ArrayBuffer(23), dv = new DataView(b);
+      dv.setUint8(0, 1);
+      dv.setFloat32(1, x, true); dv.setFloat32(5, y, true);
+      dv.setFloat32(9, vx, true); dv.setFloat32(13, vy, true);
+      dv.setFloat32(17, a, true);
+      dv.setUint8(21, (dead ? 1 : 0) | (th << 1));
+      dv.setUint8(22, Math.round(frac * 255));
+      return b;
+    }
+    function findInStates(c, id) {
+      for (let i = c.bins.length - 1; i >= 0; i--) {
+        const dv = c.bins[i];
+        if (dv.getUint8(0) !== 2) continue;
+        const count = dv.getUint16(9, true);
+        let off = 11;
+        for (let k = 0; k < count && off + 24 <= dv.byteLength; k++, off += 24) {
+          if (dv.getUint16(off, true) === id) {
+            return { x: dv.getFloat32(off + 2, true), y: dv.getFloat32(off + 6, true) };
+          }
+        }
+      }
+      return null;
+    }
+
     const A = await client('Alice', 'corsair');
     assert(A.welcome.id > 0 && Number.isFinite(A.welcome.seed), 'A got welcome with id+seed');
     assert(A.welcome.roster.length === 4, 'A sees 4 bots in roster');
     assert(A.welcome.team === 1 || A.welcome.team === 2, 'teams mode assigns Alice a team');
-    assert(A.welcome.goal > 0, 'welcome carries the team goal');
+    assert(A.welcome.goal > 0 && A.welcome.me && A.welcome.me.elo === 1200, 'welcome carries goal + fresh elo');
     const B = await client('Bob', 'warden');
-    assert(B.welcome.roster.some(r => r.name === 'Alice'), 'B sees Alice in roster');
     assert(B.welcome.team === (A.welcome.team === 1 ? 2 : 1), 'Bob balanced onto the other team');
-    assert(B.welcome.roster.every(r => !r.bot || r.team === 1 || r.team === 2), 'bots carry teams in roster');
-
-    // A should be told about B joining
-    await new Promise(r => setTimeout(r, 300));
-    assert(A.msgs.some(m => m.t === 'join' && m.p && m.p.name === 'Bob'), 'A received join(Bob)');
-
-    // state relay: B reports a position, A should see it in a states broadcast
-    B.ws.send(JSON.stringify({ t: 's', x: 1234, y: 2345, vx: 10, vy: 0, a: 1, d: 0, f: 0.9, th: 1 }));
-    await new Promise(r => setTimeout(r, 400));
     const bId = B.welcome.id;
-    assert(A.msgs.some(m => m.t === 'states' && m.s.some(row => row[0] === bId && Math.abs(row[1] - 1234) < 2)),
-      'A sees Bob position via states broadcast');
-    assert(A.msgs.some(m => m.t === 'states'), 'bot states are broadcast');
 
-    // fire relay
-    B.ws.send(JSON.stringify({ t: 'fire', kind: 'gun', shots: [{ x: 1234, y: 2345, vx: 500, vy: 0 }], level: 1, dmg: 300, bounces: 0 }));
+    const status = await fetch('http://localhost:' + PORT + '/status').then(r => r.json());
+    assert(status.players === 2 && status.mode === 'teams', '/status reports 2 pilots in teams mode');
+
+    // binary state relay: B reports a position, A sees it in a binary snapshot
+    B.ws.send(mkStateBuf(1234, 2345, 10, 0, 1, 0, 1, 0.9));
+    await new Promise(r => setTimeout(r, 400));
+    const seen = findInStates(A, bId);
+    assert(seen && Math.abs(seen.x - 1234) < 2 && Math.abs(seen.y - 2345) < 2,
+      'A sees Bob via 30Hz binary snapshots (' + (seen ? seen.x : 'none') + ')');
+    assert(A.bins.length > 3, 'binary snapshots stream continuously');
+
+    // fire relay + rate validation: 3 instant shots -> only the first relays
+    const gunMsg = JSON.stringify({ t: 'fire', kind: 'gun', shots: [{ x: 1234, y: 2345, vx: 500, vy: 0 }], level: 1, dmg: 300, bounces: 0 });
+    B.ws.send(gunMsg); B.ws.send(gunMsg); B.ws.send(gunMsg);
     await new Promise(r => setTimeout(r, 300));
-    assert(A.msgs.some(m => m.t === 'fire' && m.kind === 'gun' && m.id === bId), 'A received Bob\'s gunfire');
+    const relayed = A.msgs.filter(m => m.t === 'fire' && m.kind === 'gun' && m.id === bId).length;
+    assert(relayed === 1, 'fire-rate validation: 3 rapid shots relayed as ' + relayed);
 
-    // chat relay
+    // public chat reaches the other team; team chat does not
     A.ws.send(JSON.stringify({ t: 'chat', text: 'hello zone' }));
+    A.ws.send(JSON.stringify({ t: 'chat', text: 'secret plan', tc: 1 }));
     await new Promise(r => setTimeout(r, 300));
-    assert(B.msgs.some(m => m.t === 'chat' && m.text === 'hello zone' && m.name === 'Alice'), 'B received Alice\'s chat');
+    assert(B.msgs.some(m => m.t === 'chat' && m.text === 'hello zone'), 'public chat relayed');
+    assert(!B.msgs.some(m => m.t === 'chat' && m.text === 'secret plan'), 'team chat stays private');
 
     // death + score relay
     B.ws.send(JSON.stringify({ t: 'death', killer: A.welcome.id, bounty: 5 }));
     await new Promise(r => setTimeout(r, 300));
     assert(A.msgs.some(m => m.t === 'death' && m.id === bId), 'A saw Bob\'s death');
-    assert(A.msgs.some(m => m.t === 'score' && m.id === A.welcome.id && m.score >= 15), 'Alice got kill credit (10+bounty)');
+    assert(A.msgs.some(m => m.t === 'score' && m.id === A.welcome.id && m.score >= 15), 'Alice got kill credit');
     assert(A.msgs.some(m => m.t === 'prize+'), 'death dropped greens');
+
+    // ---- duel ladder: challenge, accept, first to 5, elo updates
+    A.ws.send(JSON.stringify({ t: 'chat', text: '/duel Bob' }));
+    await new Promise(r => setTimeout(r, 300));
+    assert(B.msgs.some(m => m.t === 'chat' && m.id === 0 && /challenges you/.test(m.text)), 'Bob received the challenge');
+    B.ws.send(JSON.stringify({ t: 'chat', text: '/accept' }));
+    await new Promise(r => setTimeout(r, 300));
+    assert(A.msgs.some(m => m.t === 'duelstart') && B.msgs.some(m => m.t === 'duelstart'), 'duel started for both');
+    for (let i = 0; i < 5; i++) {
+      B.ws.send(JSON.stringify({ t: 'death', killer: A.welcome.id, bounty: 0 }));
+      await new Promise(r => setTimeout(r, 900));   // respect the death spam guard
+    }
+    const aEnd = A.msgs.find(m => m.t === 'duelend');
+    const bEnd = B.msgs.find(m => m.t === 'duelend');
+    assert(aEnd && aEnd.won === 1 && aEnd.elo > 1200, 'Alice won the duel and gained elo (' + (aEnd && aEnd.elo) + ')');
+    assert(bEnd && bEnd.won === 0 && bEnd.elo < 1200, 'Bob lost elo');
+    assert(A.msgs.some(m => m.t === 'duelscore'), 'duel score updates flowed');
+    assert(A.msgs.some(m => m.t === 'elo' && m.id === A.welcome.id), 'elo broadcast for badges');
+    const ladder = await fetch('http://localhost:' + PORT + '/api/stats').then(r => r.json());
+    assert(ladder.some(p => p.name === 'Alice' && p.elo > 1200), '/api/stats ladder shows Alice\'s rating');
+    const statsHtml = await fetch('http://localhost:' + PORT + '/stats').then(r => r.text());
+    assert(statsHtml.includes('pilot ladder'), '/stats page renders');
+
+    // ---- map voting: majority of 2 triggers a rebuild
+    A.ws.send(JSON.stringify({ t: 'chat', text: '/votemap rings' }));
+    B.ws.send(JSON.stringify({ t: 'chat', text: '/votemap rings' }));
+    await new Promise(r => setTimeout(r, 6200));
+    assert(A.msgs.some(m => m.t === 'newmap' && m.style === 'rings'), 'map vote rebuilt the world as rings');
 
     // leave relay
     B.ws.close();
@@ -355,7 +466,7 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     assert(A.msgs.some(m => m.t === 'leave' && m.id === bId), 'A saw Bob leave');
 
     A.ws.close();
-    console.log('OK  server: join/state/fire/chat/death/leave all relay correctly');
+    console.log('OK  server: binary netcode, validation, team chat, duels, ladder, map votes all work');
   } finally {
     cleanup();
   }

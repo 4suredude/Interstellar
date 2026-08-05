@@ -30,6 +30,8 @@
     // net
     net: null, netErr: '', myId: 0, name: '', nameStr: '', stateTick: 0, kaTimer: 0,
     chatOpen: false, chatStr: '',
+    zoneStatus: null, zoneMode: '', sideFlip: 0, duel: null, myElo: 0,
+    lastKillerId: 0, coreOwner: 0,
   };
   const keys = Object.create(null);
   let canvas = null, ctx = null, vw = 1280, vh = 720, dpr = 1;
@@ -246,6 +248,7 @@
   function matchScoreKill(e) {
     const m = G.match;
     if (!m || m.over || m.online || !e.vTeam) return;
+    if (m.mode === 'core') return;   // core rounds are won by holding the ring
     if (e.kTeam && e.kTeam !== e.vTeam) { if (e.kTeam === 1) m.a++; else m.b++; }
     else { if (e.vTeam === 1) m.b++; else m.a++; }   // suicide feeds the enemy
     checkMatchEnd();
@@ -344,6 +347,12 @@
           if (mine && G.online) netSend({ t: 'fire', kind: 'blink', x0: e.x0, y0: e.y0, x1: e.x1, y1: e.y1, hue: e.hue });
           break;
         }
+        case 'warp': {
+          blinkFX(e.x0, e.y0, e.x1, e.y1, e.hue);
+          if (mine) say('Warped to your Comet', '#8df');
+          if (mine && G.online) netSend({ t: 'fire', kind: 'warp', x0: e.x0, y0: e.y0, x1: e.x1, y1: e.y1, hue: e.hue });
+          break;
+        }
         case 'burst': {
           G.waves.push({ x: e.x, y: e.y, r: 6, maxR: 90, t: 0, dur: 0.25, hue: 60 });
           sndBoom(e.x, e.y, false);
@@ -364,10 +373,10 @@
           if (mine) {
             G.shake = Math.min(16, G.shake + e.dmg / 55);
             G.hitFlash = Math.min(0.5, G.hitFlash + e.dmg / 1600);
-            // credit remote reapers for the energy they stole from us
+            // report the hit: server credits attacker accuracy + reaper leech
             if (G.online) {
               const att = W.byId.get(e.att);
-              if (att && att.remote && att.t.leech) netSend({ t: 'leech', to: e.att, amount: Math.round(e.dmg * att.t.leech) });
+              if (att && att.remote) netSend({ t: 'dmg', att: e.att, amount: Math.round(e.dmg) });
             }
           }
           break;
@@ -391,6 +400,7 @@
           else if (e.kStreak >= 8 && (e.kStreak - 8) % 3 === 0) say(e.kName + ' is UNSTOPPABLE (' + e.kStreak + ')', '#f66');
           if (G.player && e.victim === G.player.id) {
             G.deathBy = e.kName && e.killer !== e.victim ? e.kName : 'their own bomb';
+            G.lastKillerId = e.killer;
             G.combo = 0;
             G.best = Math.max(G.best, G.player.score);
             saveBest();
@@ -437,12 +447,23 @@
   function netSend(obj) {
     if (G.net && G.net.readyState === 1) G.net.send(JSON.stringify(obj));
   }
+  const nowSec = () => (GLOBAL.performance ? GLOBAL.performance.now() : Date.now()) / 1000;
+  function fetchZoneStatus() {
+    G.zoneStatus = null;
+    try {
+      const url = serverURL().replace(/^ws/, 'http') + '/status';
+      GLOBAL.fetch(url).then(r => r.json())
+        .then(j => { G.zoneStatus = j; })
+        .catch(() => { G.zoneStatus = { err: 1 }; });
+    } catch (e) { G.zoneStatus = { err: 1 }; }
+  }
   function netConnect() {
     G.state = 'connecting';
     G.netErr = '';
     let ws;
     try { ws = new GLOBAL.WebSocket(serverURL()); }
     catch (e) { G.netErr = String(e.message || e); G.state = 'error'; return; }
+    ws.binaryType = 'arraybuffer';
     G.net = ws;
     ws.onopen = () => {
       G.state = 'select';
@@ -458,10 +479,54 @@
       }
     };
     ws.onmessage = m => {
+      if (typeof m.data !== 'string') { handleBinary(m.data); return; }
       let msg;
       try { msg = JSON.parse(m.data); } catch (e) { return; }
       handleNet(msg);
     };
+  }
+  // binary S2C states: u8 tag=2, f64 serverMs, u16 count, 24B/ship
+  function handleBinary(data) {
+    const W = G.W;
+    if (!W) return;
+    const dv = new DataView(data);
+    if (dv.byteLength < 11 || dv.getUint8(0) !== 2) return;
+    const count = dv.getUint16(9, true);
+    const rt = nowSec();
+    let off = 11;
+    for (let i = 0; i < count && off + 24 <= dv.byteLength; i++, off += 24) {
+      const id = dv.getUint16(off, true);
+      const s = W.byId.get(id);
+      if (!s || !s.remote) continue;
+      const x = dv.getFloat32(off + 2, true), y = dv.getFloat32(off + 6, true);
+      const vx = dv.getFloat32(off + 10, true), vy = dv.getFloat32(off + 14, true);
+      const a = dv.getFloat32(off + 18, true);
+      const flags = dv.getUint8(off + 22);
+      const frac = dv.getUint8(off + 23) / 255;
+      const dead = !!(flags & 1), th = (flags >> 1) & 1;
+      if (s.dead && !dead) { s.snaps = []; s.safe = 2; s.x = x; s.y = y; }
+      s.dead = dead;
+      s.netX = x; s.netY = y; s.netVx = vx; s.netVy = vy; s.netA = a; s.netT = 0;
+      if (!s.snaps) s.snaps = [];
+      s.snaps.push({ rt, x, y, vx, vy, a, th, frac, dead });
+      if (s.snaps.length > 24) s.snaps.shift();
+    }
+  }
+  // binary C2S state: u8 tag=1, f32 x,y,vx,vy,angle, u8 flags, u8 frac
+  const stateBuf = typeof ArrayBuffer !== 'undefined' ? new ArrayBuffer(23) : null;
+  function sendStateBin() {
+    const p = G.player;
+    if (!p || !stateBuf || !G.net || G.net.readyState !== 1) return;
+    const dv = new DataView(stateBuf);
+    dv.setUint8(0, 1);
+    dv.setFloat32(1, p.x, true);
+    dv.setFloat32(5, p.y, true);
+    dv.setFloat32(9, p.vx, true);
+    dv.setFloat32(13, p.vy, true);
+    dv.setFloat32(17, p.angle, true);
+    dv.setUint8(21, (p.dead ? 1 : 0) | ((p.ctl.thrust > 0 || p.rocketT > 0 ? 1 : 0) << 1));
+    dv.setUint8(22, Math.round(clamp(p.energy / p.maxEnergy, 0, 1) * 255));
+    try { G.net.send(stateBuf); } catch (e) { }
   }
   function rosterAdd(r) {
     const W = G.W;
@@ -473,6 +538,7 @@
     W.byId.set(s.id, s);
     W.nextId = Math.max(W.nextId, r.id + 1);
     s.kills = r.kills || 0; s.deaths = r.deaths || 0; s.score = r.score || 0;
+    s.elo = r.elo || 0;
     s.dead = !!r.dead;
     s.x = s.netX = r.x || WORLD / 2;
     s.y = s.netY = r.y || WORLD / 2;
@@ -483,16 +549,26 @@
       case 'welcome': {
         G.myId = msg.id;
         const team = msg.team || 0;
+        G.zoneMode = msg.mode || 'teams';
+        G.sideFlip = msg.flip || 0;
+        G.myElo = msg.me ? msg.me.elo : 0;
         // rebuild world from the server's seed so maps match
-        const opts = { seed: msg.seed, spawnPrizes: false };
+        const opts = {
+          seed: msg.seed, spawnPrizes: false, mapStyle: msg.style || 'nexus',
+          ghostInterp: true, now: nowSec,
+        };
         if (team) {
           const C = WORLD / 2;
           opts.respawnDelay = 2.2;
-          opts.spawnPoint = sh => sh.team ? {
-            x: (sh.team === 1 ? C - 950 : C + 950) + SIM.rand(-260, 260),
-            y: C + SIM.rand(-320, 320),
-            angle: sh.team === 1 ? 0 : Math.PI,
-          } : null;
+          opts.spawnPoint = sh => {
+            if (!sh.team) return null;
+            const side = G.sideFlip ? 3 - sh.team : sh.team;
+            return {
+              x: (side === 1 ? C - 950 : C + 950) + SIM.rand(-260, 260),
+              y: C + SIM.rand(-320, 320),
+              angle: side === 1 ? 0 : Math.PI,
+            };
+          };
         }
         G.W = SIM.createWorld(opts);
         prerenderMap();
@@ -500,6 +576,7 @@
         for (const p of msg.prizes) SIM.addPrize(G.W, p[1], p[2], p[0]);
         // now create OUR ship with the server-issued id
         const me = SIM.makeShip(G.W, G.pendingShip, 'local', G.name, msg.hue, team);
+        me.elo = G.myElo;
         G.W.byId.delete(me.id);
         me.id = msg.id;
         G.W.byId.set(me.id, me);
@@ -508,10 +585,16 @@
         G.player = me;
         SIM.drainEvents(G.W);
         G.mode = team ? 'online-teams' : 'online-ffa';
-        G.match = team ? { mode: 'online', online: true, target: msg.goal || 30, a: msg.ta || 0, b: msg.tb || 0, over: false } : null;
+        const isCore = G.zoneMode === 'core';
+        G.match = team ? {
+          mode: isCore ? 'core' : 'online', online: true, target: msg.goal || 30,
+          a: (isCore ? msg.ca : msg.ta) || 0, b: (isCore ? msg.cb : msg.tb) || 0, over: false,
+        } : null;
         G.state = 'play';
-        say('Connected — welcome to the zone, ' + G.name + '.', '#8df');
-        if (team) say('You fly for ' + (team === 1 ? 'BLUE' : 'RED') + ' — first to ' + (msg.goal || 30) + '. // prefix for team chat.', team === 1 ? '#8cf' : '#f98');
+        say('Connected — welcome to the zone, ' + G.name + ' (elo ' + G.myElo + ').', '#8df');
+        if (team) say('You fly for ' + (team === 1 ? 'BLUE' : 'RED') + ' — ' +
+          (isCore ? 'hold the core ring to score, first to ' : 'first to ') + (msg.goal || 30) +
+          '. Chat: // team · /duel <name> · /help', team === 1 ? '#8cf' : '#f98');
         say('ENTER to chat. Fly dangerous.', '#8df');
         break;
       }
@@ -545,6 +628,7 @@
         else if (msg.kind === 'burst') { SIM.injectBurst(W, o, msg); G.waves.push({ x: msg.x, y: msg.y, r: 6, maxR: 90, t: 0, dur: 0.25, hue: 60 }); }
         else if (msg.kind === 'repel') { SIM.injectRepel(W, o, msg); G.waves.push({ x: msg.x, y: msg.y, r: 10, maxR: 230, t: 0, dur: 0.35, hue: 200 }); sndRepel(msg.x, msg.y); }
         else if (msg.kind === 'blink') { blinkFX(msg.x0, msg.y0, msg.x1, msg.y1, msg.hue || o.hue); }
+        else if (msg.kind === 'warp') { blinkFX(msg.x0, msg.y0, msg.x1, msg.y1, msg.hue || o.hue); }
         break;
       }
       case 'leech': {
@@ -581,34 +665,79 @@
         if (W) SIM.removePrizeById(W, msg.id);
         break;
       case 'chat': {
+        if (msg.id === 0) { say('» ' + msg.text, '#fd8'); sndChat(); break; }
         say((msg.tc ? 'T· ' : '') + msg.name + '> ' + msg.text, msg.tc ? '#8fd4a8' : '#9cf');
         sndChat();
         break;
       }
       case 'tscore': {
-        if (G.match && G.match.online) { G.match.a = msg.a; G.match.b = msg.b; }
+        if (G.match && G.match.online && G.match.mode !== 'core') { G.match.a = msg.a; G.match.b = msg.b; }
         break;
       }
-      case 'match': {
+      case 'core': {
+        G.coreOwner = msg.o || 0;
+        if (G.match && G.match.online && G.match.mode === 'core') { G.match.a = msg.a; G.match.b = msg.b; }
+        break;
+      }
+      case 'round': {
         const won = msg.winner === myTeam();
-        banner(won ? 'VICTORY' : 'DEFEAT', (msg.winner === 1 ? 'BLUE' : 'RED') + ' takes the round — scores reset', 5);
+        banner(won ? 'ROUND WON' : 'ROUND LOST',
+          'MVP: ' + (msg.mvp || '—') + ' (' + (msg.mvpK || 0) + ')  ·  sides swap', 6);
         if (won) sndWin(); else sndLose();
+        G.sideFlip = msg.flip || 0;
         if (G.match && G.match.online) { G.match.a = 0; G.match.b = 0; }
+        G.coreOwner = 0;
+        break;
+      }
+      case 'duelstart': {
+        const p = G.player;
+        if (p) {
+          p.x = msg.x; p.y = msg.y; p.vx = 0; p.vy = 0;
+          p.angle = msg.angle;
+          p.energy = p.maxEnergy;
+          p.safe = 1.5;
+          if (p.dead) { p.dead = false; }
+        }
+        G.duel = { opp: msg.opp, name: msg.oppName, a: 0, b: 0, target: msg.target, mine: 0, theirs: 0 };
+        banner('DUEL vs ' + msg.oppName, 'first to ' + msg.target + ' — center arena', 3.5);
+        break;
+      }
+      case 'duelscore': {
+        if (G.duel) { G.duel.mine = msg.mine; G.duel.theirs = msg.theirs; }
+        break;
+      }
+      case 'duelend': {
+        banner(msg.won ? 'DUEL VICTORY' : 'DUEL LOST',
+          'elo ' + msg.elo + ' (' + (msg.won ? '+' : '−') + msg.delta + ')', 5);
+        if (msg.won) sndWin(); else sndLose();
+        if (G.player) G.player.elo = msg.elo;
+        G.myElo = msg.elo;
+        G.duel = null;
+        break;
+      }
+      case 'elo': {
+        const s = W && W.byId.get(msg.id);
+        if (s) s.elo = msg.elo;
+        break;
+      }
+      case 'newmap': {
+        if (!W) break;
+        const oldShips = W.ships.slice();
+        const opts = Object.assign({}, W.opts, { seed: msg.seed, mapStyle: msg.style });
+        G.W = SIM.createWorld(opts);
+        for (const s of oldShips) {
+          G.W.ships.push(s);
+          G.W.byId.set(s.id, s);
+          G.W.nextId = Math.max(G.W.nextId, s.id + 1);
+          s.snaps = [];
+        }
+        prerenderMap();
+        if (G.player) SIM.spawnShip(G.W, G.player);
+        SIM.drainEvents(G.W);
+        say('Warped to a new ' + msg.style + ' sector', '#fd8');
         break;
       }
     }
-  }
-  function netShipState() {
-    const p = G.player;
-    return {
-      t: 's',
-      x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10,
-      vx: Math.round(p.vx), vy: Math.round(p.vy),
-      a: Math.round(p.angle * 100) / 100,
-      d: p.dead ? 1 : 0,
-      f: Math.round(clamp(p.energy / p.maxEnergy, 0, 1) * 100) / 100,
-      th: p.ctl.thrust > 0 || p.rocketT > 0 ? 1 : 0,
-    };
   }
 
   // ---------------------------------------------------------------- world setup
@@ -752,9 +881,36 @@
       if (G.msgs[i].t > 9) G.msgs.splice(i, 1);
     }
 
-    // camera
+    // solo core-mode scoring
+    if (G.match && G.match.mode === 'core' && !G.match.online && !G.match.over) {
+      const m = G.match, C = WORLD / 2;
+      let present = 0;
+      for (const s of W.ships) {
+        if (s.dead || !s.team) continue;
+        if (hyp(s.x - C, s.y - C) < 340) present |= s.team === 1 ? 1 : 2;
+      }
+      const solo = present === 1 ? 1 : present === 2 ? 2 : 0;
+      if (solo && solo === G.coreOwner) {
+        m.coreAcc = (m.coreAcc || 0) + dt;
+        if (m.coreAcc >= 3) {
+          m.coreAcc = 0;
+          if (solo === 1) m.a++; else m.b++;
+          if (solo === myTeam()) sndPrize();
+          checkMatchEnd();
+        }
+      } else {
+        G.coreOwner = solo;
+        m.coreAcc = 0;
+      }
+    }
+
+    // camera: follow the player; killcam while dead; roam in attract mode
     let target = null;
-    if (G.player && G.state === 'play') target = G.player;
+    if (G.player && G.state === 'play' && !G.player.dead) target = G.player;
+    else if (G.player && G.state === 'play' && G.player.dead) {
+      const killer = W.byId.get(G.lastKillerId);
+      target = killer && !killer.dead ? killer : G.player;
+    }
     else {
       G.demoT -= dt;
       if (!G.demoShip || G.demoShip.dead || G.demoT <= 0) {
@@ -782,10 +938,10 @@
       if (G.beepT <= 0) { G.beepT = 0.55; sndBeep(); }
     }
 
-    // net upkeep
+    // net upkeep: 30Hz binary state reports
     if (G.online && G.state === 'play' && G.player) {
       G.stateTick++;
-      if (G.stateTick >= 3) { G.stateTick = 0; netSend(netShipState()); }
+      if (G.stateTick >= 2) { G.stateTick = 0; sendStateBin(); }
     }
   }
 
@@ -1097,7 +1253,8 @@
         : isAlly ? 'rgba(140,190,255,0.85)'
         : s.team && G.player && G.player.team ? 'rgba(255,150,130,0.85)'
         : 'rgba(200,210,235,0.6)';
-      ctx.fillText(s.name, s.x, s.y + s.t.radius + 20);
+      const badge = s.elo >= 1600 ? '★★ ' : s.elo >= 1400 ? '★ ' : s.elo >= 1275 ? '☆ ' : '';
+      ctx.fillText(badge + s.name, s.x, s.y + s.t.radius + 20);
       const frac = clamp(s.energy / s.maxEnergy, 0, 1);
       ctx.fillStyle = 'rgba(0,0,0,0.45)';
       ctx.fillRect(s.x - 14, s.y + s.t.radius + 24, 28, 3);
@@ -1117,6 +1274,26 @@
     ctx.translate(Math.round(vw / 2 - G.cam.x + shx), Math.round(vh / 2 - G.cam.y + shy));
 
     ctx.drawImage(G.mapBig, 0, 0);
+
+    // core objective ring
+    if (G.match && G.match.mode === 'core') {
+      const C = WORLD / 2;
+      const own = G.coreOwner;
+      const hue = own === 1 ? 210 : own === 2 ? 8 : 50;
+      const pulse = 0.5 + 0.25 * Math.sin(G.time * (own ? 6 : 2));
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.strokeStyle = 'hsla(' + hue + ',90%,60%,' + pulse.toFixed(3) + ')';
+      ctx.lineWidth = own ? 5 : 3;
+      ctx.beginPath();
+      ctx.arc(C, C, 340, 0, TAU);
+      ctx.stroke();
+      ctx.strokeStyle = 'hsla(' + hue + ',90%,70%,0.25)';
+      ctx.lineWidth = 14;
+      ctx.beginPath();
+      ctx.arc(C, C, 340, 0, TAU);
+      ctx.stroke();
+      ctx.globalCompositeOperation = 'source-over';
+    }
 
     for (const p of W.prizes) {
       const pulse = 0.75 + 0.25 * Math.sin(G.time * 4 + p.phase);
@@ -1285,8 +1462,16 @@
     }
     txt(String(Math.max(0, p.energy | 0)), vw / 2, by + 13, 12, '#eaffff', 'center', 700);
 
-    // match score bar (duel / squad / online teams)
-    if (G.match) {
+    // match score bar (duel / squad / core / online teams)
+    if (G.duel) {
+      const d = G.duel;
+      const mw = 250, mx = vw / 2 - mw / 2, my = by + 30;
+      panel(mx, my, mw, 24);
+      txt('YOU', mx + 12, my + 16, 10, '#8fc2ff', 'left', 700);
+      txt(d.name.toUpperCase(), mx + mw - 12, my + 16, 10, '#ff9d8a', 'right', 700);
+      txt(d.mine + '  —  ' + d.theirs, mx + mw / 2, my + 17, 14, '#ffe9b8', 'center', 800);
+      txt('DUEL · first to ' + d.target, vw / 2, my + 38, 10, '#fd8', 'center');
+    } else if (G.match) {
       const m = G.match;
       const mine = myTeam() === 2 ? m.b : m.a;
       const theirs = myTeam() === 2 ? m.a : m.b;
@@ -1297,7 +1482,11 @@
       txt(labelL, mx + 12, my + 16, 10, '#8fc2ff', 'left', 700);
       txt(labelR, mx + mw - 12, my + 16, 10, '#ff9d8a', 'right', 700);
       txt(mine + '  —  ' + theirs, mx + mw / 2, my + 17, 14, '#eaffff', 'center', 800);
-      txt('first to ' + m.target, vw / 2, my + 38, 10, '#678', 'center');
+      const coreNote = m.mode === 'core'
+        ? (G.coreOwner ? (G.coreOwner === myTeam() ? 'CORE: yours' : 'CORE: contested by enemy') : 'CORE: open')
+        : '';
+      txt((m.mode === 'core' ? coreNote + ' · ' : '') + 'first to ' + m.target, vw / 2, my + 38, 10,
+        m.mode === 'core' && G.coreOwner ? (G.coreOwner === myTeam() ? '#8fc2ff' : '#ff9d8a') : '#678', 'center');
     }
 
     // center banner: countdowns, multikills, victory
@@ -1439,7 +1628,7 @@
     ctx.restore();
     const blink = Math.sin(G.time * 4) > -0.3;
     if (blink) txt('ENTER — SQUAD BATTLE  3v3', vw / 2, vh / 2 + 62, 20, '#cff', 'center', 700);
-    txt('1 — duel the Ace      2 — squad battle      3 — free-for-all', vw / 2, vh / 2 + 92, 14, '#9bc', 'center', 600);
+    txt('1 duel the Ace   ·   2 squad battle   ·   3 free-for-all   ·   4 hold the core', vw / 2, vh / 2 + 92, 14, '#9bc', 'center', 600);
     txt('O — online multiplayer', vw / 2, vh / 2 + 118, 16, '#8fd4a8', 'center', 700);
     txt('best score ' + G.best + '   ·   duel record ' + G.duelW + 'W – ' + G.duelL + 'L', vw / 2, vh / 2 + 146, 13, '#678', 'center');
     txt('M mute  ·  N music  ·  F fullscreen', vw / 2, vh - 24, 12, '#567', 'center');
@@ -1460,6 +1649,7 @@
     const modeLabel = G.online ? 'ONLINE ZONE'
       : G.pendingMode === 'duel' ? 'DUEL — you vs the Ace, first to 5'
       : G.pendingMode === 'squad' ? 'SQUAD BATTLE — 3v3, first to 15'
+      : G.pendingMode === 'core' ? 'HOLD THE CORE — 3v3, first to 20'
       : 'FREE-FOR-ALL SANDBOX';
     txt(modeLabel, vw / 2, 96, 13, '#fd8', 'center', 700);
     txt('◄ ► select   ·   ENTER launch   ·   ESC back', vw / 2, 116, 12, '#789', 'center');
@@ -1523,7 +1713,15 @@
     panel(vw / 2 - 160, vh / 2 - 30, 320, 44);
     txt(G.nameStr + ((G.time * 3 | 0) % 2 ? '_' : ''), vw / 2, vh / 2 - 1, 20, '#cff', 'center', 700);
     txt('ENTER — connect to ' + serverURL(), vw / 2, vh / 2 + 50, 14, '#8fd4a8', 'center');
-    txt('ESC — back', vw / 2, vh / 2 + 76, 12, '#678', 'center');
+    const zs = G.zoneStatus;
+    if (zs && !zs.err) {
+      txt('zone online — ' + zs.players + ' pilot' + (zs.players === 1 ? '' : 's') + ' · ' +
+        zs.bots + ' bots · mode ' + zs.mode + ' · map ' + zs.map, vw / 2, vh / 2 + 76, 13, '#8fc2ff', 'center', 600);
+    } else if (zs && zs.err) {
+      txt('zone status unavailable — connecting may still work', vw / 2, vh / 2 + 76, 12, '#a86', 'center');
+    }
+    txt('your callsign is your identity: elo, duel record, and stats persist on the server', vw / 2, vh / 2 + 100, 11, '#678', 'center');
+    txt('ESC — back', vw / 2, vh / 2 + 124, 12, '#678', 'center');
   }
   function drawConnecting() {
     ctx.fillStyle = 'rgba(4,6,13,0.78)';
@@ -1551,8 +1749,9 @@
       'A D / ← →      rotate',
       'SPACE / CTRL   guns',
       'SHIFT / B      bomb',
-      'E repel   Q burst   R rocket   X multifire',
-      'ENTER          chat (online)',
+      'E repel   Q burst   R rocket/blink   X multifire',
+      'T              warp to allied Comet (squads)',
+      'ENTER          chat · /duel <name> · /votemap · /stats',
       'M mute         N music        F fullscreen',
       '',
       'P resume    ·    BACKSPACE abandon to title',
@@ -1625,7 +1824,7 @@
       G.match = { mode, target: 5, a: 0, b: 0, over: false };
       banner('DUEL — FIRST TO 5', 'the Ace shows no mercy', 3.2);
       say('Duel started. Greens still spawn — control them.', '#8df');
-    } else if (mode === 'squad') {
+    } else if (mode === 'squad' || mode === 'core') {
       // 3v3 squad dogfight: anchored team spawns on opposite flanks
       G.W = SIM.createWorld({
         seed: (Math.random() * 1e9) | 0, spawnPrizes: true,
@@ -1651,9 +1850,16 @@
       }
       s = SIM.makeShip(G.W, shipKey, 'local', 'You', TEAM_HUES[1][0], 1);
       SIM.spawnShip(G.W, s);
-      G.match = { mode, target: 15, a: 0, b: 0, over: false };
-      banner('SQUAD BATTLE — FIRST TO 15', 'your wing is with you', 3.2);
-      say('Squad battle: blue vs red. No friendly fire.', '#8df');
+      if (mode === 'core') {
+        G.match = { mode: 'core', target: 20, a: 0, b: 0, over: false, coreAcc: 0 };
+        G.coreOwner = 0;
+        banner('HOLD THE CORE — FIRST TO 20', 'own the center ring alone to score', 3.6);
+        say('Hold the Core: 3 seconds of sole control = 1 point.', '#8df');
+      } else {
+        G.match = { mode, target: 15, a: 0, b: 0, over: false };
+        banner('SQUAD BATTLE — FIRST TO 15', 'your wing is with you', 3.2);
+        say('Squad battle: blue vs red. No friendly fire.', '#8df');
+      }
     } else {
       G.match = null;
       newSoloWorld();
@@ -1662,7 +1868,7 @@
       say('Welcome to Interstellar — good luck, pilot.', '#8df');
       say('Collect greens. Guard your energy. Everything costs it.', '#8df');
     }
-    if (mode === 'duel' || mode === 'squad') {
+    if (mode !== 'ffa') {
       for (let i = 0; i < 10; i++) {
         const p = SIM.randClearPoint(G.W);
         SIM.addPrize(G.W, p.x, p.y);
@@ -1709,7 +1915,7 @@
 
   const HANDLED = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space',
     'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'Enter', 'Backspace', 'Escape',
-    'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyB', 'KeyE', 'KeyQ', 'KeyR', 'KeyX', 'KeyM', 'KeyN', 'KeyP', 'KeyF', 'KeyO']);
+    'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyB', 'KeyE', 'KeyQ', 'KeyR', 'KeyT', 'KeyX', 'KeyM', 'KeyN', 'KeyP', 'KeyF', 'KeyO']);
 
   function onKeyDown(e) {
     audioInit();
@@ -1768,8 +1974,10 @@
       else if (code === 'Digit1') { G.online = false; G.pendingMode = 'duel'; G.state = 'select'; }
       else if (code === 'Digit2') { G.online = false; G.pendingMode = 'squad'; G.state = 'select'; }
       else if (code === 'Digit3') { G.online = false; G.pendingMode = 'ffa'; G.state = 'select'; }
+      else if (code === 'Digit4') { G.online = false; G.pendingMode = 'core'; G.state = 'select'; }
       else if (code === 'KeyO') {
         G.nameStr = G.nameStr || loadName();
+        fetchZoneStatus();
         G.state = 'nameentry';
       }
     } else if (G.state === 'error') {
@@ -1807,6 +2015,7 @@
       if (code === 'KeyE') SIM.doRepel(G.W, p);
       else if (code === 'KeyQ') SIM.doBurst(G.W, p);
       else if (code === 'KeyR') { if (p.t.blink) SIM.doBlink(G.W, p); else SIM.fireRocket(G.W, p); }
+      else if (code === 'KeyT') SIM.warpToBeacon(G.W, p);
       else if (code === 'KeyX' && p.multi) {
         p.multiOn = !p.multiOn;
         say('MultiFire ' + (p.multiOn ? 'ON' : 'OFF'), '#8df');

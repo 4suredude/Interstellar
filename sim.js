@@ -239,6 +239,7 @@
   function genMap(W) {
     const rng = W.rng;
     const rn = n => (rng() * n) | 0;
+    const style = W.opts.mapStyle || 'nexus';
     const m = new Uint8Array(MAPS * MAPS);
     const set = (x, y, v) => { if (x >= 0 && y >= 0 && x < MAPS && y < MAPS) m[y * MAPS + x] = v; };
     const fillRect = (x, y, w, h, v) => { for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) set(x + i, y + j, v); };
@@ -246,7 +247,8 @@
     fillRect(0, 0, MAPS, 2, 1); fillRect(0, MAPS - 2, MAPS, 2, 1);
     fillRect(0, 0, 2, MAPS, 1); fillRect(MAPS - 2, 0, 2, MAPS, 1);
 
-    for (let i = 0; i < 60; i++) {
+    const structures = style === 'gauntlet' ? 40 : style === 'rings' ? 25 : 60;
+    for (let i = 0; i < structures; i++) {
       const cx = 8 + rn(MAPS - 16), cy = 8 + rn(MAPS - 16);
       switch (rn(5)) {
         case 0: fillRect(cx, cy, 2 + rn(5), 2 + rn(5), 1); break;
@@ -276,15 +278,41 @@
     }
 
     const C = MAPS / 2, AR = 21;
+    const drawRing = (radius, gates, gateHalf) => {
+      const steps = Math.max(720, radius * 40);
+      for (let a = 0; a < steps; a++) {
+        const ang = a / steps * TAU;
+        const gate = gates.some(g => Math.abs(angleNorm(ang - g * TAU)) < gateHalf);
+        if (!gate) {
+          set(Math.round(C + Math.cos(ang) * radius), Math.round(C + Math.sin(ang) * radius), 1);
+          set(Math.round(C + Math.cos(ang) * (radius + 1)), Math.round(C + Math.sin(ang) * (radius + 1)), 1);
+        }
+      }
+    };
     for (let ty = 0; ty < MAPS; ty++)
       for (let tx = 0; tx < MAPS; tx++)
         if (hyp(tx - C, ty - C) < AR - 1) set(tx, ty, 0);
-    for (let a = 0; a < 720; a++) {
-      const ang = a / 720 * TAU;
-      const gate = [0, 0.25, 0.5, 0.75].some(g => Math.abs(angleNorm(ang - g * TAU)) < 0.11);
-      if (!gate) {
-        set(Math.round(C + Math.cos(ang) * AR), Math.round(C + Math.sin(ang) * AR), 1);
-        set(Math.round(C + Math.cos(ang) * (AR + 1)), Math.round(C + Math.sin(ang) * (AR + 1)), 1);
+    drawRing(AR, [0, 0.25, 0.5, 0.75], 0.11);
+    if (style === 'rings') {
+      // concentric battle rings around the core
+      drawRing(45, [0.125, 0.375, 0.625, 0.875], 0.05);
+      drawRing(70, [0, 0.166, 0.333, 0.5, 0.666, 0.833], 0.035);
+    }
+    if (style === 'gauntlet') {
+      // long broken corridor walls channel the fights into lanes
+      for (let i = 0; i < 10; i++) {
+        const horiz = rng() < 0.5;
+        const len = 30 + rn(50);
+        const px = 10 + rn(MAPS - 20 - (horiz ? len : 0));
+        const py = 10 + rn(MAPS - 20 - (horiz ? 0 : len));
+        let gapAt = 6 + rn(8);
+        for (let k = 0; k < len; k++) {
+          if (k === gapAt) { k += 3; gapAt = k + 8 + rn(8); continue; }
+          const x = horiz ? px + k : px, y = horiz ? py : py + k;
+          if (hyp(x - C, y - C) < AR + 4) continue;   // keep the arena clean
+          set(x, y, 1);
+          set(horiz ? x : x + 1, horiz ? y + 1 : y, 1);
+        }
       }
     }
     for (let i = 0; i < 8; i++) {
@@ -366,7 +394,8 @@
       hue: hue == null ? t.hue : hue,
       x: WORLD / 2, y: WORLD / 2, vx: 0, vy: 0, angle: rand(0, TAU),
       energy: t.maxEnergy,
-      gunCd: 0, bombCd: 0, repelCd: 0, burstCd: 0, rocketT: 0, regenT: 0, blinkCd: 0,
+      gunCd: 0, bombCd: 0, repelCd: 0, burstCd: 0, rocketT: 0, regenT: 0, blinkCd: 0, warpCd: 0,
+      dormant: false,
       dead: false, respawn: 0, safe: 0, flash: 0,
       kills: 0, deaths: 0, score: 0,
       ctl: { turn: 0, thrust: 0, gun: false, bomb: false },
@@ -577,6 +606,26 @@
     return true;
   }
 
+  function warpToBeacon(W, s) {
+    // squad play: jump to your team's Comet, wherever the fight is
+    if (s.dead || s.warpCd > 0 || s.energy <= 450 || !s.team) return false;
+    let best = null, bd = 1e9;
+    for (const o of W.ships) {
+      if (o === s || o.dead || o.team !== s.team || o.type !== 'comet') continue;
+      const d = dist2(s, o);
+      if (d < bd) { bd = d; best = o; }
+    }
+    if (!best || bd < 500) return false;
+    const p = findClearNear(W, best.x + rand(-90, 90), best.y + rand(-90, 90));
+    if (!p) return false;
+    s.energy -= 450; s.warpCd = 18; s.safe = 0;
+    const x0 = s.x, y0 = s.y;
+    s.x = p.x; s.y = p.y;
+    s.vx = best.vx; s.vy = best.vy;
+    ev(W, { e: 'warp', id: s.id, x0, y0, x1: s.x, y1: s.y, hue: s.hue });
+    return true;
+  }
+
   function doBlink(W, s) {
     if (!s.t.blink || s.blinkCd > 0 || s.dead) return false;
     if (s.energy <= 350) return false;
@@ -752,24 +801,49 @@
   // ------------------------------------------------------------ ship update
   function updateShip(W, s, dt) {
     if (s.dead) {
-      if (!s.remote) {
+      if (!s.remote && !s.dormant) {
         s.respawn -= dt;
         if (s.respawn <= 0) spawnShip(W, s);
       }
       return;
     }
     if (s.remote) {
-      // ghost: chase last network state with dead reckoning
-      s.netT += dt;
-      const tx = s.netX + s.netVx * s.netT;
-      const ty = s.netY + s.netVy * s.netT;
-      const k = Math.min(1, dt * 10);
-      s.x += (tx - s.x) * k;
-      s.y += (ty - s.y) * k;
-      s.vx = s.netVx; s.vy = s.netVy;
-      s.angle += angleNorm(s.netA - s.angle) * Math.min(1, dt * 12);
-      s.ctl.thrust = s.netTh;
-      s.energy = s.netFrac * s.maxEnergy;
+      if (W.opts.ghostInterp && s.snaps && s.snaps.length) {
+        // jitter-buffered interpolation: render ~100ms in the past, lerping
+        // between timestamped snapshots; extrapolate briefly on packet loss
+        const snaps = s.snaps;
+        const tt = (W.opts.now ? W.opts.now() : 0) - 0.1;
+        while (snaps.length > 2 && snaps[1].rt <= tt) snaps.shift();
+        const last = snaps[snaps.length - 1];
+        if (snaps.length >= 2 && tt <= last.rt) {
+          const p0 = snaps[0], p1 = snaps[1];
+          const span = Math.max(1e-4, p1.rt - p0.rt);
+          const f = clamp((tt - p0.rt) / span, 0, 1);
+          s.x = p0.x + (p1.x - p0.x) * f;
+          s.y = p0.y + (p1.y - p0.y) * f;
+          s.angle = p0.a + angleNorm(p1.a - p0.a) * f;
+        } else {
+          const ex = clamp(tt - last.rt, 0, 0.15);
+          s.x = last.x + last.vx * ex;
+          s.y = last.y + last.vy * ex;
+          s.angle = last.a;
+        }
+        s.vx = last.vx; s.vy = last.vy;
+        s.ctl.thrust = last.th;
+        s.energy = last.frac * s.maxEnergy;
+      } else {
+        // dead reckoning fallback (used by the server's ghost view)
+        s.netT += dt;
+        const tx = s.netX + s.netVx * s.netT;
+        const ty = s.netY + s.netVy * s.netT;
+        const k = Math.min(1, dt * 10);
+        s.x += (tx - s.x) * k;
+        s.y += (ty - s.y) * k;
+        s.vx = s.netVx; s.vy = s.netVy;
+        s.angle += angleNorm(s.netA - s.angle) * Math.min(1, dt * 12);
+        s.ctl.thrust = s.netTh;
+        s.energy = s.netFrac * s.maxEnergy;
+      }
       if (s.flash > 0) s.flash -= dt;
       if (s.safe > 0) s.safe -= dt;
       return;
@@ -811,8 +885,16 @@
     s.x = clamp(s.x, TILE * 2 + r, WORLD - TILE * 2 - r);
     s.y = clamp(s.y, TILE * 2 + r, WORLD - TILE * 2 - r);
 
-    s.energy = Math.min(s.maxEnergy, s.energy + s.recharge * dt);
-    s.gunCd -= dt; s.bombCd -= dt; s.repelCd -= dt; s.burstCd -= dt; s.blinkCd -= dt;
+    // warden aura: allied wardens nearby boost recharge
+    let rech = s.recharge;
+    if (s.team) {
+      for (const o of W.ships) {
+        if (o === s || o.dead || o.team !== s.team || o.type !== 'warden') continue;
+        if (hyp(o.x - s.x, o.y - s.y) < 170) { rech *= 1.35; break; }
+      }
+    }
+    s.energy = Math.min(s.maxEnergy, s.energy + rech * dt);
+    s.gunCd -= dt; s.bombCd -= dt; s.repelCd -= dt; s.burstCd -= dt; s.blinkCd -= dt; s.warpCd -= dt;
     if (s.safe > 0) s.safe -= dt;
     if (s.flash > 0) s.flash -= dt;
 
@@ -946,7 +1028,7 @@
     tileSolid, solidAtPx, rectSolid, losClear, randClearPoint, findSpawn,
     createWorld, makeShip, removeShip, spawnShip, addBots,
     applyLoadoutDefaults, applyPrize, addPrize, removePrizeById,
-    fireGun, fireBomb, doRepel, doBurst, fireRocket, doBlink,
+    fireGun, fireBomb, doRepel, doBurst, fireRocket, doBlink, warpToBeacon,
     injectGun, injectBomb, injectRepel, injectBurst,
     damageShip, killShip, explode,
     updateWorld, drainEvents,
