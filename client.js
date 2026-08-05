@@ -23,6 +23,8 @@
     parts: [], waves: [], msgs: [],
     cam: { x: WORLD / 2, y: WORLD / 2 }, shake: 0, hitFlash: 0,
     sel: 0, best: 0, deathBy: '',
+    mode: 'ffa', pendingMode: 'squad', match: null,
+    banner: null, lastKillT: -99, combo: 0, duelW: 0, duelL: 0,
     demoT: 0, demoShip: null,
     mapBig: null, radarC: null,
     // net
@@ -97,6 +99,11 @@
     tone('sine', 300, 1400, 0.12, v);
     tone('sine', 1400, 250, 0.18, v * 0.7, 0.1);
   };
+  // combat-feel confirms — these are what make landing shots feel good
+  const sndHitTick = () => tone('sine', 1350, 1000, 0.045, 0.14);
+  const sndKill = () => { tone('square', 520, 780, 0.07, 0.2); tone('square', 780, 1180, 0.11, 0.2, 0.07); };
+  const sndWin = () => { [440, 554, 659, 880].forEach((f, i) => tone('sine', f, f, 0.35, 0.2, i * 0.13)); };
+  const sndLose = () => { [330, 311, 233].forEach((f, i) => tone('sine', f, f * 0.97, 0.4, 0.18, i * 0.18)); };
 
   // ---------------------------------------------------------------- music
   // Generative space electronica, synthesized live — no audio files.
@@ -230,6 +237,32 @@
     G.msgs.push({ text, color: color || '#8f8', t: 0 });
     if (G.msgs.length > 40) G.msgs.shift();
   }
+  function banner(main, sub, dur) {
+    G.banner = { main, sub: sub || '', t: 0, dur: dur || 2.6 };
+  }
+
+  // ---------------------------------------------------------------- match logic
+  function myTeam() { return G.player ? G.player.team : 0; }
+  function matchScoreKill(e) {
+    const m = G.match;
+    if (!m || m.over || m.online || !e.vTeam) return;
+    if (e.kTeam && e.kTeam !== e.vTeam) { if (e.kTeam === 1) m.a++; else m.b++; }
+    else { if (e.vTeam === 1) m.b++; else m.a++; }   // suicide feeds the enemy
+    checkMatchEnd();
+  }
+  function checkMatchEnd() {
+    const m = G.match;
+    if (!m || m.over || (m.a < m.target && m.b < m.target)) return;
+    m.over = true;
+    const winTeam = m.a >= m.target ? 1 : 2;
+    const won = winTeam === myTeam();
+    banner(won ? 'VICTORY' : 'DEFEAT', 'ENTER — rematch  ·  BACKSPACE — hangar', 30);
+    if (won) sndWin(); else sndLose();
+    if (m.mode === 'duel') {
+      if (won) G.duelW++; else G.duelL++;
+      try { GLOBAL.localStorage.setItem('interstellar-duels', G.duelW + ',' + G.duelL); } catch (err) { }
+    }
+  }
 
   // ---------------------------------------------------------------- fx
   function spark(x, y, hue, n, speed) {
@@ -327,6 +360,7 @@
           break;
         case 'hit': {
           spark(e.x, e.y, e.hue, 6, 220);
+          if (G.player && e.att === G.player.id && e.id !== G.player.id) sndHitTick();
           if (mine) {
             G.shake = Math.min(16, G.shake + e.dmg / 55);
             G.hitFlash = Math.min(0.5, G.hitFlash + e.dmg / 1600);
@@ -351,16 +385,28 @@
           boomFX(e.x, e.y, 95, e.hue, true);
           if (e.kName && e.killer !== e.victim) say(e.vName + ' killed by: ' + e.kName + ' (' + e.bounty + ')', '#8f8');
           else say(e.vName + ' self-destructed', '#f88');
+          // streak callouts keep the room aware of who's dangerous
+          if (e.kStreak === 3) say(e.kName + ' is heating up (3)', '#fb6');
+          else if (e.kStreak === 5) say(e.kName + ' is on a rampage! (5)', '#f96');
+          else if (e.kStreak >= 8 && (e.kStreak - 8) % 3 === 0) say(e.kName + ' is UNSTOPPABLE (' + e.kStreak + ')', '#f66');
           if (G.player && e.victim === G.player.id) {
             G.deathBy = e.kName && e.killer !== e.victim ? e.kName : 'their own bomb';
+            G.combo = 0;
             G.best = Math.max(G.best, G.player.score);
             saveBest();
             if (G.online) netSend({ t: 'death', killer: e.killer, bounty: e.bounty });
           }
           if (G.player && e.killer === G.player.id && e.victim !== e.killer) {
+            sndKill();
+            if (G.time - G.lastKillT < 4.5) G.combo++; else G.combo = 1;
+            G.lastKillT = G.time;
+            if (G.combo === 2) banner('DOUBLE KILL', '');
+            else if (G.combo === 3) banner('TRIPLE KILL', '');
+            else if (G.combo >= 4) banner('KILLING FRENZY', G.combo + ' in a row');
             G.best = Math.max(G.best, G.player.score);
             saveBest();
           }
+          matchScoreKill(e);
           break;
         }
         case 'green':
@@ -420,7 +466,7 @@
   function rosterAdd(r) {
     const W = G.W;
     if (W.byId.get(r.id)) return;
-    const s = SIM.makeShip(W, r.ship, 'remote', r.name, r.hue);
+    const s = SIM.makeShip(W, r.ship, 'remote', r.name, r.hue, r.team || 0);
     // server owns the id space online
     W.byId.delete(s.id);
     s.id = r.id;
@@ -436,13 +482,24 @@
     switch (msg.t) {
       case 'welcome': {
         G.myId = msg.id;
+        const team = msg.team || 0;
         // rebuild world from the server's seed so maps match
-        G.W = SIM.createWorld({ seed: msg.seed, spawnPrizes: false });
+        const opts = { seed: msg.seed, spawnPrizes: false };
+        if (team) {
+          const C = WORLD / 2;
+          opts.respawnDelay = 2.2;
+          opts.spawnPoint = sh => sh.team ? {
+            x: (sh.team === 1 ? C - 950 : C + 950) + SIM.rand(-260, 260),
+            y: C + SIM.rand(-320, 320),
+            angle: sh.team === 1 ? 0 : Math.PI,
+          } : null;
+        }
+        G.W = SIM.createWorld(opts);
         prerenderMap();
         for (const r of msg.roster) rosterAdd(r);
         for (const p of msg.prizes) SIM.addPrize(G.W, p[1], p[2], p[0]);
         // now create OUR ship with the server-issued id
-        const me = SIM.makeShip(G.W, G.pendingShip, 'local', G.name, msg.hue);
+        const me = SIM.makeShip(G.W, G.pendingShip, 'local', G.name, msg.hue, team);
         G.W.byId.delete(me.id);
         me.id = msg.id;
         G.W.byId.set(me.id, me);
@@ -450,8 +507,11 @@
         SIM.spawnShip(G.W, me);
         G.player = me;
         SIM.drainEvents(G.W);
+        G.mode = team ? 'online-teams' : 'online-ffa';
+        G.match = team ? { mode: 'online', online: true, target: msg.goal || 30, a: msg.ta || 0, b: msg.tb || 0, over: false } : null;
         G.state = 'play';
         say('Connected — welcome to the zone, ' + G.name + '.', '#8df');
+        if (team) say('You fly for ' + (team === 1 ? 'BLUE' : 'RED') + ' — first to ' + (msg.goal || 30) + '. // prefix for team chat.', team === 1 ? '#8cf' : '#f98');
         say('ENTER to chat. Fly dangerous.', '#8df');
         break;
       }
@@ -521,8 +581,19 @@
         if (W) SIM.removePrizeById(W, msg.id);
         break;
       case 'chat': {
-        say(msg.name + '> ' + msg.text, '#9cf');
+        say((msg.tc ? 'T· ' : '') + msg.name + '> ' + msg.text, msg.tc ? '#8fd4a8' : '#9cf');
         sndChat();
+        break;
+      }
+      case 'tscore': {
+        if (G.match && G.match.online) { G.match.a = msg.a; G.match.b = msg.b; }
+        break;
+      }
+      case 'match': {
+        const won = msg.winner === myTeam();
+        banner(won ? 'VICTORY' : 'DEFEAT', (msg.winner === 1 ? 'BLUE' : 'RED') + ' takes the round — scores reset', 5);
+        if (won) sndWin(); else sndLose();
+        if (G.match && G.match.online) { G.match.a = 0; G.match.b = 0; }
         break;
       }
     }
@@ -701,6 +772,10 @@
     }
     G.shake = Math.max(0, G.shake - 40 * dt);
     G.hitFlash = Math.max(0, G.hitFlash - 1.6 * dt);
+    if (G.banner) {
+      G.banner.t += dt;
+      if (G.banner.t > G.banner.dur) G.banner = null;
+    }
 
     if (G.player && !G.player.dead && G.player.energy < G.player.maxEnergy * 0.25) {
       G.beepT -= dt;
@@ -930,7 +1005,8 @@
   function drawShip(s) {
     if (s.dead) return;
     const isMe = s === G.player;
-    const stealthy = s.t.stealth && !isMe;
+    const isAlly = s.team && G.player && G.player.team && s.team === G.player.team;
+    const stealthy = s.t.stealth && !isMe && !isAlly;
     const alpha = stealthy ? 0.35 : 1;
     const r = s.t.radius * 1.35;
 
@@ -1017,7 +1093,10 @@
     if (!stealthy || isMe) {
       ctx.font = '600 10px "Segoe UI", system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillStyle = isMe ? 'rgba(160,240,255,0.9)' : 'rgba(200,210,235,0.6)';
+      ctx.fillStyle = isMe ? 'rgba(160,240,255,0.9)'
+        : isAlly ? 'rgba(140,190,255,0.85)'
+        : s.team && G.player && G.player.team ? 'rgba(255,150,130,0.85)'
+        : 'rgba(200,210,235,0.6)';
       ctx.fillText(s.name, s.x, s.y + s.t.radius + 20);
       const frac = clamp(s.energy / s.maxEnergy, 0, 1);
       ctx.fillStyle = 'rgba(0,0,0,0.45)';
@@ -1206,6 +1285,35 @@
     }
     txt(String(Math.max(0, p.energy | 0)), vw / 2, by + 13, 12, '#eaffff', 'center', 700);
 
+    // match score bar (duel / squad / online teams)
+    if (G.match) {
+      const m = G.match;
+      const mine = myTeam() === 2 ? m.b : m.a;
+      const theirs = myTeam() === 2 ? m.a : m.b;
+      const mw = 230, mx = vw / 2 - mw / 2, my = by + 30;
+      panel(mx, my, mw, 24);
+      const labelL = m.mode === 'duel' ? 'YOU' : 'ALLIES';
+      const labelR = m.mode === 'duel' ? 'ACE' : 'ENEMY';
+      txt(labelL, mx + 12, my + 16, 10, '#8fc2ff', 'left', 700);
+      txt(labelR, mx + mw - 12, my + 16, 10, '#ff9d8a', 'right', 700);
+      txt(mine + '  —  ' + theirs, mx + mw / 2, my + 17, 14, '#eaffff', 'center', 800);
+      txt('first to ' + m.target, vw / 2, my + 38, 10, '#678', 'center');
+    }
+
+    // center banner: countdowns, multikills, victory
+    if (G.banner) {
+      const b = G.banner;
+      const a = b.t < 0.25 ? b.t / 0.25 : b.t > b.dur - 0.5 ? Math.max(0, (b.dur - b.t) / 0.5) : 1;
+      ctx.globalAlpha = a;
+      ctx.save();
+      ctx.shadowColor = 'rgba(255,200,90,0.8)';
+      ctx.shadowBlur = 26;
+      txt(b.main, vw / 2, vh * 0.3, 44, '#ffe9b8', 'center', 800);
+      ctx.restore();
+      if (b.sub) txt(b.sub, vw / 2, vh * 0.3 + 34, 15, '#cdb', 'center', 600);
+      ctx.globalAlpha = 1;
+    }
+
     // pilot panel
     panel(12, 12, 196, 90);
     txt(p.name + '  ·  ' + p.t.label, 22, 32, 13, shipColor(p, 70), 'left', 700);
@@ -1294,8 +1402,9 @@
         ctx.fillStyle = (G.time * 4 | 0) % 2 ? '#fff' : '#8ef';
         ctx.fillRect(rx + s.x * k - 2, ry + s.y * k - 2, 4, 4);
       } else {
-        if (s.t.stealth) continue; // daggers don't paint on radar
-        ctx.fillStyle = 'rgba(255,120,90,0.9)';
+        const ally = s.team && G.player && G.player.team && s.team === G.player.team;
+        if (s.t.stealth && !ally) continue; // enemy daggers don't paint on radar
+        ctx.fillStyle = ally ? 'rgba(120,180,255,0.95)' : 'rgba(255,120,90,0.9)';
         ctx.fillRect(rx + s.x * k - 1.5, ry + s.y * k - 1.5, 3, 3);
       }
     }
@@ -1329,9 +1438,10 @@
     txt('T O P - D O W N   S P A C E   C O M B A T', vw / 2, vh / 2 - 26, 16, '#ffd9a0', 'center', 700);
     ctx.restore();
     const blink = Math.sin(G.time * 4) > -0.3;
-    if (blink) txt('ENTER — fly solo vs bots', vw / 2, vh / 2 + 66, 20, '#cff', 'center', 700);
-    txt('O — online multiplayer', vw / 2, vh / 2 + 98, 17, '#8fd4a8', 'center', 700);
-    txt('best score  ' + G.best, vw / 2, vh / 2 + 128, 13, '#678', 'center');
+    if (blink) txt('ENTER — SQUAD BATTLE  3v3', vw / 2, vh / 2 + 62, 20, '#cff', 'center', 700);
+    txt('1 — duel the Ace      2 — squad battle      3 — free-for-all', vw / 2, vh / 2 + 92, 14, '#9bc', 'center', 600);
+    txt('O — online multiplayer', vw / 2, vh / 2 + 118, 16, '#8fd4a8', 'center', 700);
+    txt('best score ' + G.best + '   ·   duel record ' + G.duelW + 'W – ' + G.duelL + 'L', vw / 2, vh / 2 + 146, 13, '#678', 'center');
     txt('M mute  ·  N music  ·  F fullscreen', vw / 2, vh - 24, 12, '#567', 'center');
   }
 
@@ -1347,7 +1457,12 @@
     ctx.fillStyle = 'rgba(4,6,13,0.78)';
     ctx.fillRect(0, 0, vw, vh);
     txt('CHOOSE YOUR SHIP', vw / 2, 72, 30, '#c8ecff', 'center', 800);
-    txt('◄ ► select   ·   ENTER launch   ·   ESC back' + (G.online ? '   ·   ONLINE' : ''), vw / 2, 100, 13, G.online ? '#8fd4a8' : '#789', 'center');
+    const modeLabel = G.online ? 'ONLINE ZONE'
+      : G.pendingMode === 'duel' ? 'DUEL — you vs the Ace, first to 5'
+      : G.pendingMode === 'squad' ? 'SQUAD BATTLE — 3v3, first to 15'
+      : 'FREE-FOR-ALL SANDBOX';
+    txt(modeLabel, vw / 2, 96, 13, '#fd8', 'center', 700);
+    txt('◄ ► select   ·   ENTER launch   ·   ESC back', vw / 2, 116, 12, '#789', 'center');
 
     const n = SHIP_ORDER.length;
     const cy = vh / 2 - 40;
@@ -1466,6 +1581,11 @@
   // ---------------------------------------------------------------- persistence
   function loadBest() {
     try { G.best = parseInt(GLOBAL.localStorage.getItem('interstellar-best') || '0', 10) || 0; } catch (e) { G.best = 0; }
+    try {
+      const d = (GLOBAL.localStorage.getItem('interstellar-duels') || '0,0').split(',');
+      G.duelW = parseInt(d[0], 10) || 0;
+      G.duelL = parseInt(d[1], 10) || 0;
+    } catch (e) { G.duelW = 0; G.duelL = 0; }
   }
   function saveBest() {
     try { GLOBAL.localStorage.setItem('interstellar-best', String(G.best)); } catch (e) { }
@@ -1478,18 +1598,80 @@
   }
 
   // ---------------------------------------------------------------- flow
+  const TEAM_HUES = { 1: [200, 212, 190, 224], 2: [10, 24, 0, 34] };
   function startSolo(shipKey) {
+    const mode = G.pendingMode || 'ffa';
+    G.mode = mode;
     G.online = false;
     if (G.net) { try { G.net.close(); } catch (e) { } G.net = null; }
-    newSoloWorld();
-    const s = SIM.makeShip(G.W, shipKey, 'local', 'You', 190);
-    SIM.spawnShip(G.W, s);
+    G.combo = 0; G.lastKillT = -99; G.banner = null;
+    const C = WORLD / 2;
+    let s;
+    if (mode === 'duel') {
+      // 1v1 against the Ace: fast respawns facing each other across the arena
+      G.W = SIM.createWorld({
+        seed: (Math.random() * 1e9) | 0, spawnPrizes: true,
+        respawnDelay: 1.4, safeTime: 1.0,
+        spawnPoint: sh => sh.team === 1
+          ? { x: C - 430, y: C, angle: 0 }
+          : { x: C + 430, y: C, angle: Math.PI },
+      });
+      prerenderMap();
+      const ace = SIM.makeShip(G.W, SIM.pick(['corsair', 'paladin', 'reaper', 'comet']), 'bot', 'Ace', TEAM_HUES[2][0], 2);
+      ace.ai.skill = 0.92;
+      SIM.spawnShip(G.W, ace);
+      s = SIM.makeShip(G.W, shipKey, 'local', 'You', TEAM_HUES[1][0], 1);
+      SIM.spawnShip(G.W, s);
+      G.match = { mode, target: 5, a: 0, b: 0, over: false };
+      banner('DUEL — FIRST TO 5', 'the Ace shows no mercy', 3.2);
+      say('Duel started. Greens still spawn — control them.', '#8df');
+    } else if (mode === 'squad') {
+      // 3v3 squad dogfight: anchored team spawns on opposite flanks
+      G.W = SIM.createWorld({
+        seed: (Math.random() * 1e9) | 0, spawnPrizes: true,
+        respawnDelay: 2.2, safeTime: 2.0,
+        spawnPoint: sh => ({
+          x: (sh.team === 1 ? C - 950 : C + 950) + SIM.rand(-260, 260),
+          y: C + SIM.rand(-320, 320),
+          angle: sh.team === 1 ? 0 : Math.PI,
+        }),
+      });
+      prerenderMap();
+      const names = SIM.BOT_NAMES.slice();
+      const takeName = () => names.splice((Math.random() * names.length) | 0, 1)[0];
+      for (let i = 0; i < 2; i++) {
+        const ally = SIM.makeShip(G.W, SIM.pick(SIM.SHIP_ORDER), 'bot', takeName(), TEAM_HUES[1][i + 1], 1);
+        ally.ai.skill = 0.62;
+        SIM.spawnShip(G.W, ally);
+      }
+      for (let i = 0; i < 3; i++) {
+        const foe = SIM.makeShip(G.W, SIM.pick(SIM.SHIP_ORDER), 'bot', takeName(), TEAM_HUES[2][i], 2);
+        foe.ai.skill = 0.62;
+        SIM.spawnShip(G.W, foe);
+      }
+      s = SIM.makeShip(G.W, shipKey, 'local', 'You', TEAM_HUES[1][0], 1);
+      SIM.spawnShip(G.W, s);
+      G.match = { mode, target: 15, a: 0, b: 0, over: false };
+      banner('SQUAD BATTLE — FIRST TO 15', 'your wing is with you', 3.2);
+      say('Squad battle: blue vs red. No friendly fire.', '#8df');
+    } else {
+      G.match = null;
+      newSoloWorld();
+      s = SIM.makeShip(G.W, shipKey, 'local', 'You', 190);
+      SIM.spawnShip(G.W, s);
+      say('Welcome to Interstellar — good luck, pilot.', '#8df');
+      say('Collect greens. Guard your energy. Everything costs it.', '#8df');
+    }
+    if (mode === 'duel' || mode === 'squad') {
+      for (let i = 0; i < 10; i++) {
+        const p = SIM.randClearPoint(G.W);
+        SIM.addPrize(G.W, p.x, p.y);
+      }
+    }
     SIM.drainEvents(G.W);
     G.player = s;
     G.state = 'play';
     G.paused = false;
-    say('Welcome to Interstellar — good luck, pilot.', '#8df');
-    say('Collect greens. Guard your energy. Everything costs it.', '#8df');
     return s;
   }
   function launchOnline(shipKey) {
@@ -1504,6 +1686,8 @@
     }
     G.player = null;
     G.chatOpen = false;
+    G.match = null;
+    G.banner = null;
     newSoloWorld(); // fresh attract-mode zone behind the title
     G.state = 'title';
     G.paused = false;
@@ -1536,8 +1720,15 @@
     if (G.chatOpen) {
       e.preventDefault();
       if (code === 'Enter') {
-        const text = G.chatStr.trim();
-        if (text) { netSend({ t: 'chat', text: text.slice(0, 120) }); say(G.name + '> ' + text, '#cfe'); }
+        let text = G.chatStr.trim();
+        if (text) {
+          const tc = text.startsWith('//') ? 1 : 0;
+          if (tc) text = text.slice(2).trim();
+          if (text) {
+            netSend({ t: 'chat', text: text.slice(0, 120), tc });
+            say((tc ? 'T· ' : '') + G.name + '> ' + text, tc ? '#8fd4a8' : '#cfe');
+          }
+        }
         G.chatOpen = false; G.chatStr = '';
       } else if (code === 'Escape') { G.chatOpen = false; G.chatStr = ''; }
       else if (code === 'Backspace') G.chatStr = G.chatStr.slice(0, -1);
@@ -1573,7 +1764,10 @@
     }
 
     if (G.state === 'title') {
-      if (code === 'Enter' || code === 'Space') { G.online = false; G.state = 'select'; }
+      if (code === 'Enter' || code === 'Space') { G.online = false; G.pendingMode = 'squad'; G.state = 'select'; }
+      else if (code === 'Digit1') { G.online = false; G.pendingMode = 'duel'; G.state = 'select'; }
+      else if (code === 'Digit2') { G.online = false; G.pendingMode = 'squad'; G.state = 'select'; }
+      else if (code === 'Digit3') { G.online = false; G.pendingMode = 'ffa'; G.state = 'select'; }
       else if (code === 'KeyO') {
         G.nameStr = G.nameStr || loadName();
         G.state = 'nameentry';
@@ -1599,6 +1793,10 @@
     } else if (G.state === 'play') {
       if (code === 'KeyP' || (code === 'Escape' && !G.online)) { G.paused = !G.paused; return; }
       if (code === 'Escape' && G.online) { G.paused = !G.paused; return; } // menu overlay; zone keeps running
+      if (G.match && G.match.over && !G.online) {
+        if (code === 'Enter') { startSolo(G.player ? G.player.type : SHIP_ORDER[G.sel]); return; }
+        if (code === 'Backspace') { leaveToTitle(); return; }
+      }
       if (G.paused) {
         if (code === 'Backspace') leaveToTitle();
         return;

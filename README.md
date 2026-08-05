@@ -8,10 +8,27 @@ audio, a **12-ship hangar** (the 8 fleet hulls plus the NOVA class), and
 
 ![Combat](assets/combat.png)
 
+The game is built around **dueling and squad dogfights**: fast kill-trade
+loops, hit-confirm feedback on every landed shot, kill streaks and
+multikill callouts, and matches short enough to always want one more.
+
+## Game modes
+
+| Mode | What it is |
+| --- | --- |
+| **Duel** (`1` on the title screen) | You vs **the Ace** — a high-skill AI duelist. First to 5. Respawns are near-instant, facing each other across the central arena. Your lifetime W–L record is kept. |
+| **Squad Battle** (`2` or `Enter`) | 3v3 team dogfight vs bots — blue vs red, no friendly fire, anchored team spawns, wingmen that hunt with you. First to 15. |
+| **Free-for-all** (`3`) | The open sandbox: 10 AI pilots, every ship for itself. |
+| **Online** (`O`) | Real multiplayer. The server auto-balances players onto two teams alongside its bots, tracks the team score to 30, then resets the round. `MODE=ffa node server.js` for a classic free-for-all zone instead. |
+
+The feel layer runs in every mode: a hit-confirm tick each time your shot
+lands, a kill-confirm jingle, **DOUBLE KILL / TRIPLE KILL / KILLING FRENZY**
+banners, streak callouts in the feed ("X is on a rampage!"), and victory /
+defeat fanfares with instant rematch on Enter.
+
 ## Play solo (no install)
 
-Open `index.html` in any modern browser. Press **Enter**, pick a ship, and
-you're in a zone against 10 AI pilots.
+Open `index.html` in any modern browser, pick a mode and a ship, and fly.
 
 ## Play online (multiplayer)
 
@@ -21,8 +38,10 @@ node server.js            # one command, zero npm dependencies
 
 Everyone opens `http://<host>:8666` and presses **O — Online multiplayer**.
 Pick a callsign and a ship, and you're all in the same zone together with the
-server's bots. `PORT=9000 BOTS=4 node server.js` to customize. A different
-server can be targeted with `?server=host:port` in the URL.
+server's bots — auto-balanced onto blue and red teams (first to 30 wins the
+round). Team chat with a `//` prefix; public chat without.
+`PORT=9000 BOTS=4 GOAL=50 MODE=teams|ffa node server.js` to customize. A
+different server can be targeted with `?server=host:port` in the URL.
 
 The netcode is an owner-trusting relay: each client owns its ship, the
 server authoritatively runs bots and prizes and relays state, fire events,

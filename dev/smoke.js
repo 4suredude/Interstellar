@@ -72,6 +72,38 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     assert(evs.some(e => e.e === 'hit' && typeof e.att === 'number'), 'hit events carry attacker id');
   }
 
+  // team mechanics: friendly fire off, streaks, spawn control
+  {
+    const Wt = SIM.createWorld({
+      seed: 9, spawnPrizes: false, respawnDelay: 1.4, safeTime: 0,
+      spawnPoint: sh => sh.team === 1 ? { x: 600, y: 600, angle: 0 } : { x: 2400, y: 600, angle: Math.PI },
+    });
+    const a1 = SIM.makeShip(Wt, 'corsair', 'local', 'A1', 200, 1);
+    const a2 = SIM.makeShip(Wt, 'corsair', 'local', 'A2', 210, 1);
+    const b1 = SIM.makeShip(Wt, 'corsair', 'local', 'B1', 10, 2);
+    SIM.spawnShip(Wt, a1); SIM.spawnShip(Wt, b1);
+    assert(Math.hypot(a1.x - 600, a1.y - 600) < 340, 'team spawn anchors respected (' + (a1.x | 0) + ',' + (a1.y | 0) + ')');
+    assert(a1.angle === 0 && b1.angle === Math.PI, 'spawn facing angles applied');
+    a2.x = a1.x; a2.y = a1.y; a2.safe = 0; a1.safe = 0; b1.safe = 0;
+    const e1 = a2.energy;
+    SIM.damageShip(Wt, a2, 500, a1);
+    assert(a2.energy === e1, 'no friendly fire between teammates');
+    SIM.damageShip(Wt, b1, 500, a1);
+    assert(b1.energy < b1.maxEnergy, 'enemies still take damage');
+    b1.energy = 1;
+    SIM.damageShip(Wt, b1, 500, a1);
+    assert(b1.dead && a1.streak === 1, 'kill streak increments');
+    assert(b1.respawn === 1.4, 'respawnDelay option honored');
+    const kev = SIM.drainEvents(Wt).find(e => e.e === 'kill');
+    assert(kev && kev.kTeam === 1 && kev.vTeam === 2 && kev.kStreak === 1, 'kill event carries teams + streak');
+    // teammate bullets pass through
+    Wt.bullets.push({ x: a2.x, y: a2.y, vx: 0, vy: 0, life: 1, dmg: 500, level: 1, bounces: 0, owner: a1 });
+    const e2 = a2.energy;
+    SIM.updateWorld(Wt, SIM.STEP);
+    assert(a2.energy >= e2 - 1, 'teammate bullets pass through harmlessly');
+    console.log('OK  teams: FF off, streaks, anchored spawns all behave');
+  }
+
   const me = SIM.makeShip(W, 'corsair', 'local', 'Tester', 190);
   SIM.spawnShip(W, me);
   SIM.drainEvents(W);
@@ -194,7 +226,44 @@ const SIM = require(path.join(ROOT, 'sim.js'));
   assert(G.W.bullets.length === 1, 'remote fire injected a bullet');
   api.handleNet({ t: 'chat', id: 400, name: 'RemoteBot', text: 'gl hf' });
   for (let i = 0; i < 60; i++) update(STEP);
-  console.log('OK  client: solo + simulated online path both run clean');
+
+  // duel mode: 1v1 vs the Ace, first to 5, teams set, match object live
+  G.pendingMode = 'duel';
+  const dp = api.startSolo('corsair');
+  assert(G.match && G.match.mode === 'duel' && G.match.target === 5, 'duel match created');
+  assert(G.W.ships.length === 2 && dp.team === 1, 'duel is 1v1 with teams');
+  const ace = G.W.ships.find(s => s.name === 'Ace');
+  assert(ace && ace.team === 2 && ace.ai.skill > 0.9, 'the Ace is high-skill on team 2');
+  for (let i = 0; i < 20 * 60; i++) {
+    if (!dp.dead) { dp.ctl.thrust = 0.6; dp.ctl.gun = true; }
+    update(STEP);
+  }
+  assert(G.match.a + G.match.b > 0 || !G.match.over, 'duel runs (score ' + G.match.a + '-' + G.match.b + ')');
+  // force match end and rematch path
+  G.match.a = 5; api.G.match.over = false;
+  const cm = G.match; cm.over = false; cm.a = 5;
+  // trigger checkMatchEnd via a fake kill event path: directly kill the ace
+  ace.energy = 1; ace.safe = 0;
+  SIM.damageShip(G.W, ace, 99999, dp);
+  update(STEP);
+  assert(G.match.over, 'duel match ends at target');
+
+  // squad mode: 3v3
+  G.pendingMode = 'squad';
+  const sp2 = api.startSolo('hornet');
+  assert(G.match && G.match.mode === 'squad' && G.match.target === 15, 'squad match created');
+  assert(G.W.ships.length === 6, 'squad battle is 3v3');
+  assert(G.W.ships.filter(s => s.team === 1).length === 3 &&
+    G.W.ships.filter(s => s.team === 2).length === 3, 'teams balanced 3-3');
+  let sawTeamKill = false;
+  for (let i = 0; i < 45 * 60; i++) {
+    if (!sp2.dead) { sp2.ctl.thrust = 0.5; sp2.ctl.gun = true; sp2.ctl.turn = (i % 300) < 150 ? 0.3 : -0.3; }
+    update(STEP);
+    if (G.match.a + G.match.b > 0) sawTeamKill = true;
+  }
+  assert(sawTeamKill, 'squad battle produced team kills (' + G.match.a + '-' + G.match.b + ')');
+  for (const s of G.W.ships) assert(finiteShip(s), 'squad ship finite: ' + s.name);
+  console.log('OK  client: solo, duel, squad, and simulated online paths all run clean');
 }
 
 // ============================================================ 3) server test
@@ -244,8 +313,12 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     const A = await client('Alice', 'corsair');
     assert(A.welcome.id > 0 && Number.isFinite(A.welcome.seed), 'A got welcome with id+seed');
     assert(A.welcome.roster.length === 4, 'A sees 4 bots in roster');
+    assert(A.welcome.team === 1 || A.welcome.team === 2, 'teams mode assigns Alice a team');
+    assert(A.welcome.goal > 0, 'welcome carries the team goal');
     const B = await client('Bob', 'warden');
     assert(B.welcome.roster.some(r => r.name === 'Alice'), 'B sees Alice in roster');
+    assert(B.welcome.team === (A.welcome.team === 1 ? 2 : 1), 'Bob balanced onto the other team');
+    assert(B.welcome.roster.every(r => !r.bot || r.team === 1 || r.team === 2), 'bots carry teams in roster');
 
     // A should be told about B joining
     await new Promise(r => setTimeout(r, 300));

@@ -22,6 +22,8 @@ const SIM = require('./sim.js');
 
 const PORT = parseInt(process.env.PORT || process.argv[2] || '8666', 10);
 const BOTS = parseInt(process.env.BOTS || '8', 10);
+const MODE = (process.env.MODE || 'teams').toLowerCase(); // 'teams' | 'ffa'
+const GOAL = parseInt(process.env.GOAL || '30', 10);      // team kills to win a round
 const ROOT = __dirname;
 
 // ---------------------------------------------------------------- static
@@ -147,8 +149,26 @@ httpServer.on('upgrade', (req, sock) => {
 
 // ---------------------------------------------------------------- zone
 const SEED = (Math.random() * 1e9) | 0;
-const W = SIM.createWorld({ seed: SEED, spawnPrizes: true });
-SIM.addBots(W, BOTS);
+const TEAM_HUES = { 1: [200, 212, 190, 224], 2: [10, 24, 0, 34] };
+const worldOpts = { seed: SEED, spawnPrizes: true };
+if (MODE === 'teams') {
+  const C = SIM.WORLD / 2;
+  worldOpts.respawnDelay = 2.2;
+  worldOpts.spawnPoint = sh => sh.team ? {
+    x: (sh.team === 1 ? C - 950 : C + 950) + SIM.rand(-260, 260),
+    y: C + SIM.rand(-320, 320),
+    angle: sh.team === 1 ? 0 : Math.PI,
+  } : null;
+}
+const W = SIM.createWorld(worldOpts);
+const bots = SIM.addBots(W, BOTS);
+if (MODE === 'teams') {
+  bots.forEach((b, i) => {
+    b.team = 1 + (i % 2);
+    b.hue = TEAM_HUES[b.team][(i >> 1) % TEAM_HUES[b.team].length];
+    b.ai.skill = 0.62;
+  });
+}
 for (let i = 0; i < 14; i++) {
   const p = SIM.randClearPoint(W);
   SIM.addPrize(W, p.x, p.y);
@@ -156,10 +176,35 @@ for (let i = 0; i < 14; i++) {
 SIM.drainEvents(W);
 const HUE_POOL = [190, 8, 35, 55, 110, 150, 210, 240, 262, 300, 330, 20, 90, 180, 315];
 let hueIdx = 0;
+const teamHueIdx = { 1: 0, 2: 0 };
+const tk = { 1: 0, 2: 0 };
+
+function pickTeam() {
+  if (MODE !== 'teams') return 0;
+  let c1 = 0, c2 = 0;
+  for (const s of W.ships) {
+    if (s.team === 1) c1++; else if (s.team === 2) c2++;
+  }
+  return c1 <= c2 ? 1 : 2;
+}
+function tallyTeamKill(killer, victim) {
+  if (MODE !== 'teams' || !victim || !victim.team) return;
+  const winnerTeam = killer && killer.team && killer.team !== victim.team
+    ? killer.team
+    : (victim.team === 1 ? 2 : 1);   // suicide feeds the enemy
+  tk[winnerTeam]++;
+  broadcast({ t: 'tscore', a: tk[1], b: tk[2] });
+  if (tk[winnerTeam] >= GOAL) {
+    broadcast({ t: 'match', winner: winnerTeam });
+    log('Round over — team ' + (winnerTeam === 1 ? 'BLUE' : 'RED') + ' wins ' + tk[1] + '-' + tk[2]);
+    tk[1] = 0; tk[2] = 0;
+  }
+}
 
 function roster() {
   return W.ships.map(s => ({
     id: s.id, name: s.name, ship: s.type, hue: s.hue, bot: s.bot ? 1 : 0,
+    team: s.team || 0,
     kills: s.kills, deaths: s.deaths, score: s.score, dead: s.dead ? 1 : 0,
     x: Math.round(s.x), y: Math.round(s.y),
   }));
@@ -178,18 +223,21 @@ function onMessage(cl, msg) {
       if (cl.joined) return;
       if (!SIM.SHIP_TYPES[msg.ship]) return;
       cl.name = sanitizeName(msg.name);
-      const hue = HUE_POOL[hueIdx++ % HUE_POOL.length];
-      const ghost = SIM.makeShip(W, msg.ship, 'remote', cl.name, hue);
+      const team = pickTeam();
+      const hue = team
+        ? TEAM_HUES[team][teamHueIdx[team]++ % TEAM_HUES[team].length]
+        : HUE_POOL[hueIdx++ % HUE_POOL.length];
+      const ghost = SIM.makeShip(W, msg.ship, 'remote', cl.name, hue, team);
       cl.ship = ghost;
       cl.id = ghost.id;
       cl.joined = true;
       sendTo(cl, {
-        t: 'welcome', id: cl.id, hue, seed: SEED,
+        t: 'welcome', id: cl.id, hue, seed: SEED, team, goal: GOAL, ta: tk[1], tb: tk[2],
         roster: roster().filter(r => r.id !== cl.id),
         prizes: W.prizes.map(p => [p.id, Math.round(p.x), Math.round(p.y)]),
       });
-      broadcast({ t: 'join', p: { id: cl.id, name: cl.name, ship: msg.ship, hue, bot: 0, kills: 0, deaths: 0, score: 0 } }, cl);
-      log(cl.name + ' joined as ' + msg.ship + ' (' + clients.size + ' online)');
+      broadcast({ t: 'join', p: { id: cl.id, name: cl.name, ship: msg.ship, hue, team, bot: 0, kills: 0, deaths: 0, score: 0 } }, cl);
+      log(cl.name + ' joined as ' + msg.ship + (team ? ' [team ' + team + ']' : '') + ' (' + clients.size + ' online)');
       break;
     }
     case 's': {
@@ -248,6 +296,7 @@ function onMessage(cl, msg) {
       broadcast(scoreMsg(s));
       sendTo(cl, scoreMsg(s));
       broadcast({ t: 'death', id: cl.id, killer: msg.killer | 0, bounty }, cl);
+      tallyTeamKill(killer, s);
       log(s.name + ' killed by ' + (killer ? killer.name : '???'));
       // drop greens at the wreck
       const drops = 2 + ((Math.random() * 2) | 0);
@@ -272,8 +321,15 @@ function onMessage(cl, msg) {
       if (!cl.joined) return;
       const text = String(msg.text || '').slice(0, 120).replace(/[\x00-\x1f]/g, '');
       if (!text) return;
-      broadcast({ t: 'chat', id: cl.id, name: cl.name, text }, cl);
-      log('<' + cl.name + '> ' + text);
+      const tc = msg.tc && cl.ship && cl.ship.team ? 1 : 0;
+      const out = { t: 'chat', id: cl.id, name: cl.name, text, tc };
+      if (tc) {
+        for (const other of clients) {
+          if (other === cl || !other.joined || !other.ship) continue;
+          if (other.ship.team === cl.ship.team) sendTo(other, out);
+        }
+      } else broadcast(out, cl);
+      log((tc ? '[T' + cl.ship.team + '] ' : '') + '<' + cl.name + '> ' + text);
       break;
     }
     case 'ka':
@@ -331,6 +387,7 @@ setInterval(() => {
           const kcl = [...clients].find(c => c.id === k.id);
           if (kcl) sendTo(kcl, scoreMsg(k));
         }
+        tallyTeamKill(k, v);
         log((v ? v.name : '?') + ' killed by ' + (k ? k.name : '???') + ' [bots]');
         break;
       }
@@ -373,6 +430,6 @@ function log(m) {
 }
 
 httpServer.listen(PORT, () => {
-  log('Interstellar zone server on http://localhost:' + PORT + '  (seed ' + SEED + ', ' + BOTS + ' bots)');
+  log('Interstellar zone server on http://localhost:' + PORT + '  (seed ' + SEED + ', ' + BOTS + ' bots, mode ' + MODE + ')');
   log('Players: open the URL and press O for online multiplayer.');
 });

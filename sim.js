@@ -355,13 +355,14 @@
     s.repels = t.repelStart || 1; s.bursts = 1; s.rockets = 0;
     s.bounty = 0;
   }
-  function makeShip(W, typeKey, kind, name, hue) {
-    // kind: 'local' | 'bot' | 'remote'
+  function makeShip(W, typeKey, kind, name, hue, team) {
+    // kind: 'local' | 'bot' | 'remote'; team 0 = free-for-all
     const t = SHIP_TYPES[typeKey];
     const s = {
       id: W.nextId++,
       type: typeKey, t, name,
       bot: kind === 'bot', remote: kind === 'remote',
+      team: team || 0, streak: 0,
       hue: hue == null ? t.hue : hue,
       x: WORLD / 2, y: WORLD / 2, vx: 0, vy: 0, angle: rand(0, TAU),
       energy: t.maxEnergy,
@@ -369,7 +370,7 @@
       dead: false, respawn: 0, safe: 0, flash: 0,
       kills: 0, deaths: 0, score: 0,
       ctl: { turn: 0, thrust: 0, gun: false, bomb: false },
-      ai: { target: null, mode: 'roam', think: rand(0, 0.2), wp: null, err: 0, dodge: 0, dodgeAngle: 0, avoid: 0, wantRepel: false },
+      ai: { target: null, mode: 'roam', think: rand(0, 0.2), wp: null, err: 0, dodge: 0, dodgeAngle: 0, avoid: 0, wantRepel: false, skill: 0.5 },
       // ghost interpolation
       netX: 0, netY: 0, netVx: 0, netVy: 0, netA: 0, netT: 0, netTh: 0, netFrac: 1,
     };
@@ -383,12 +384,32 @@
     if (i >= 0) W.ships.splice(i, 1);
     W.byId.delete(s.id);
   }
+  function findClearNear(W, x, y) {
+    for (let rad = 0; rad < 320; rad += 26) {
+      for (let k = 0; k < 8; k++) {
+        const a = rand(0, TAU);
+        const px = clamp(x + Math.cos(a) * rad, TILE * 3, WORLD - TILE * 3);
+        const py = clamp(y + Math.sin(a) * rad, TILE * 3, WORLD - TILE * 3);
+        if (!rectSolid(W, px - 20, py - 20, 40, 40)) return { x: px, y: py };
+      }
+    }
+    return null;
+  }
   function spawnShip(W, s) {
-    const p = findSpawn(W, s);
+    let p = null, ang = null;
+    if (W.opts.spawnPoint) {
+      const sp = W.opts.spawnPoint(s);
+      if (sp) {
+        p = findClearNear(W, sp.x, sp.y);
+        if (p && sp.angle != null) ang = sp.angle;
+      }
+    }
+    if (!p) p = findSpawn(W, s);
     s.x = p.x; s.y = p.y; s.vx = 0; s.vy = 0;
-    s.angle = rand(0, TAU);
+    s.angle = ang == null ? rand(0, TAU) : ang;
     s.energy = s.maxEnergy;
-    s.dead = false; s.safe = 2.5; s.flash = 0;
+    s.dead = false; s.flash = 0;
+    s.safe = W.opts.safeTime == null ? 2.5 : W.opts.safeTime;
     s.gunCd = 0; s.bombCd = 0; s.repelCd = 0; s.burstCd = 0; s.rocketT = 0;
     for (let i = 0; i < 2; i++) applyPrize(W, s, true);
     ev(W, { e: 'spawn', id: s.id, x: s.x, y: s.y });
@@ -574,6 +595,7 @@
   // ------------------------------------------------------------ damage
   function damageShip(W, v, dmg, att) {
     if (v.dead || v.safe > 0) return;
+    if (att && att !== v && v.team && att.team === v.team) return; // no friendly fire
     if (v.t.armor) dmg *= v.t.armor;
     ev(W, { e: 'hit', x: v.x, y: v.y, hue: v.hue, id: v.id, dmg, att: att ? att.id : 0 });
     if (v.remote) return; // their owner computes real damage
@@ -587,14 +609,17 @@
     if (v.energy < 0) killShip(W, v, att);
   }
   function killShip(W, v, att) {
-    v.dead = true; v.respawn = 3; v.deaths++;
+    v.dead = true; v.respawn = W.opts.respawnDelay || 3; v.deaths++;
+    v.streak = 0;
     const bounty = v.bounty;
+    if (att && att !== v) { att.kills++; att.score += 10 + bounty; att.bounty += 4; att.streak++; }
     ev(W, {
       e: 'kill', victim: v.id, killer: att ? att.id : 0,
       vName: v.name, kName: att ? att.name : '', bounty,
       x: v.x, y: v.y, hue: v.hue,
+      vTeam: v.team, kTeam: att ? att.team : 0,
+      kStreak: att && att !== v ? att.streak : 0,
     });
-    if (att && att !== v) { att.kills++; att.score += 10 + bounty; att.bounty += 4; }
     // local/bot worlds drop greens at the wreck; online, the server does this
     if (W.opts.spawnPrizes) {
       const drops = 2 + irand(2);
@@ -611,6 +636,7 @@
     ev(W, { e: 'boom', x, y, level });
     for (const s of W.ships) {
       if (s.dead) continue;
+      if (s !== owner && owner && s.team && s.team === owner.team) continue; // bombs spare teammates
       const d = hyp(s.x - x, s.y - y);
       if (d < R + s.t.radius) {
         const fall = 1 - clamp(d / R, 0, 1) * 0.85;
@@ -629,28 +655,30 @@
   // ------------------------------------------------------------ AI
   function aiThink(W, s) {
     const a = s.ai;
+    const skill = a.skill == null ? 0.5 : a.skill;
     let best = null, bd = 1e9;
     for (const o of W.ships) {
       if (o === s || o.dead) continue;
-      let range = 1150;
+      if (s.team && o.team === s.team) continue;          // never hunt teammates
+      let range = s.team ? 2200 : 1150;                    // squads seek the fight
       if (o.t.stealth) range *= 0.45;
       const d = dist2(s, o);
       if (d < range && d < bd) { bd = d; best = o; }
     }
     a.target = best;
-    a.err = (Math.random() - 0.5) * 0.14;
-    if (best && s.energy < s.maxEnergy * 0.3 && bd < 560) a.mode = 'flee';
+    a.err = (Math.random() - 0.5) * 0.2 * (1.2 - skill);
+    if (best && s.energy < s.maxEnergy * (0.34 - skill * 0.18) && bd < 560) a.mode = 'flee';
     else if (best) a.mode = 'fight';
     else a.mode = 'roam';
 
     let danger = null, dd = 1e9;
     for (const b of W.bombs) {
-      if (b.owner === s) continue;
+      if (b.owner === s || (s.team && b.owner && b.owner.team === s.team)) continue;
       const d = hyp(b.x - s.x, b.y - s.y);
       if (d < 300 && d < dd) { dd = d; danger = b; }
     }
     if (!danger) for (const b of W.bullets) {
-      if (b.owner === s) continue;
+      if (b.owner === s || (s.team && b.owner && b.owner.team === s.team)) continue;
       const d = hyp(b.x - s.x, b.y - s.y);
       if (d < 160 && d < dd) { dd = d; danger = b; }
     }
@@ -665,7 +693,11 @@
     const a = s.ai, c = s.ctl;
     c.gun = false; c.bomb = false;
     a.think -= dt;
-    if (a.think <= 0) { a.think = 0.13 + Math.random() * 0.09; aiThink(W, s); }
+    if (a.think <= 0) {
+      const skill = a.skill == null ? 0.5 : a.skill;
+      a.think = 0.08 + (1 - skill) * 0.12 + Math.random() * 0.06;
+      aiThink(W, s);
+    }
     if (a.wantRepel) { a.wantRepel = false; doRepel(W, s); }
 
     const t = a.target && !a.target.dead ? a.target : null;
@@ -831,6 +863,7 @@
         } else b.y = by;
         for (const s of W.ships) {
           if (s.dead || s === b.owner) continue;
+          if (s.team && b.owner && s.team === b.owner.team) continue; // pass through teammates
           if (hyp(s.x - b.x, s.y - b.y) < s.t.radius + 3) {
             damageShip(W, s, b.dmg, b.owner);
             dead = true; break;
@@ -864,6 +897,7 @@
         const prox = 22 + 8 * b.level;
         for (const s of W.ships) {
           if (s.dead || s === b.owner) continue;
+          if (s.team && b.owner && s.team === b.owner.team) continue;
           if (hyp(s.x - b.x, s.y - b.y) < s.t.radius + prox) { boom = true; break; }
         }
       }
