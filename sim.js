@@ -1,5 +1,5 @@
 /* =========================================================================
-   CONTINUUM REDUX — shared simulation core
+   INTERSTELLAR — shared simulation core
    Runs identically in the browser (window.SIM) and Node (module.exports).
    No DOM, no audio, no rendering — pure world state + events.
 
@@ -143,10 +143,10 @@
       deco: [[[0.15, 0.38], [-0.4, 0.75]], [[0.15, -0.38], [-0.4, -0.75]]],
       cockpit: [0.3, 0, 0.17, 0.12], engines: [[-0.68, 0]],
     },
-    // ---- REDUX class: the new generation ----
+    // ---- NOVA class: the new generation ----
     vanguard: {
-      label: 'Vanguard', hue: 45, cls: 'redux',
-      desc: 'REDUX gunship. Ships MultiFire and ricochet rounds straight from the factory.',
+      label: 'Vanguard', hue: 45, cls: 'nova',
+      desc: 'Nova-class gunship. Ships MultiFire and ricochet rounds straight from the factory.',
       maxEnergy: 1450, recharge: 110, thrust: 240, maxSpeed: 345, turn: 3.5,
       radius: 11, bounce: 0.6, startMulti: true, startBounce: true,
       gunLevel: 2, gunDelay: 0.4, gunCost: 130, gunSpeed: 640, gunDmgMul: 0.95,
@@ -157,8 +157,8 @@
       cockpit: [0.35, 0, 0.18, 0.11], engines: [[-0.75, 0.18], [-0.75, -0.18]],
     },
     aegis: {
-      label: 'Aegis', hue: 215, cls: 'redux',
-      desc: 'REDUX bastion. Composite plating shrugs off a quarter of all damage.',
+      label: 'Aegis', hue: 215, cls: 'nova',
+      desc: 'Nova-class bastion. Composite plating shrugs off a quarter of all damage.',
       maxEnergy: 1900, recharge: 100, thrust: 190, maxSpeed: 300, turn: 2.8,
       radius: 13, bounce: 0.45, armor: 0.72, repelStart: 2,
       gunLevel: 1, gunDelay: 0.5, gunCost: 120, gunSpeed: 600, gunDmgMul: 0.9,
@@ -169,8 +169,8 @@
       cockpit: [0.2, 0, 0.22, 0.17], engines: [[-0.85, 0.3], [-0.85, -0.3]],
     },
     reaper: {
-      label: 'Reaper', hue: 275, cls: 'redux',
-      desc: 'REDUX leech. Every hit you land feeds stolen energy back to your banks.',
+      label: 'Reaper', hue: 275, cls: 'nova',
+      desc: 'Nova-class leech. Every hit you land feeds stolen energy back to your banks.',
       maxEnergy: 1350, recharge: 85, thrust: 235, maxSpeed: 355, turn: 3.7,
       radius: 11, bounce: 0.6, leech: 0.3,
       gunLevel: 2, gunDelay: 0.5, gunCost: 140, gunSpeed: 650, gunDmgMul: 1.0,
@@ -181,8 +181,8 @@
       cockpit: [0.3, 0, 0.16, 0.11], engines: [[-0.55, 0]],
     },
     phantom: {
-      label: 'Phantom', hue: 320, cls: 'redux',
-      desc: 'REDUX blink-fighter. R warps you 240m forward — straight through walls.',
+      label: 'Phantom', hue: 320, cls: 'nova',
+      desc: 'Nova-class blink-fighter. R warps you 240m forward — straight through walls.',
       maxEnergy: 1200, recharge: 125, thrust: 260, maxSpeed: 390, turn: 4.4,
       radius: 10, bounce: 0.65, blink: true,
       gunLevel: 1, gunDelay: 0.26, gunCost: 70, gunSpeed: 660, gunDmgMul: 0.7,

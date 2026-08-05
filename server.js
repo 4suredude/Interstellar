@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /* =========================================================================
-   CONTINUUM REDUX — zone server
+   INTERSTELLAR — zone server
    Zero-dependency Node server: static file host + hand-rolled RFC 6455
    WebSocket endpoint on ONE port, running the shared sim for the bots.
 
@@ -373,6 +373,6 @@ function log(m) {
 }
 
 httpServer.listen(PORT, () => {
-  log('Continuum Redux zone server on http://localhost:' + PORT + '  (seed ' + SEED + ', ' + BOTS + ' bots)');
+  log('Interstellar zone server on http://localhost:' + PORT + '  (seed ' + SEED + ', ' + BOTS + ' bots)');
   log('Players: open the URL and press O for online multiplayer.');
 });

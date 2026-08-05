@@ -1,4 +1,4 @@
-/* Headless smoke test for Continuum Redux.
+/* Headless smoke test for Interstellar.
    1) Runs the shared sim (sim.js) directly under Node: 90s of bot combat.
    2) Runs the real client (client.js) against a stubbed DOM/canvas.
    3) Boots the real server (server.js) and drives two WebSocket clients
@@ -33,12 +33,12 @@ const SIM = require(path.join(ROOT, 'sim.js'));
 
   SIM.addBots(W, 10);
   assert(W.ships.length === 10, 'ten bots spawned');
-  assert(Object.keys(SIM.SHIP_TYPES).length === 12, '8 classic + 4 REDUX hulls exist');
+  assert(Object.keys(SIM.SHIP_TYPES).length === 12, '8 classic + 4 NOVA hulls exist');
   for (const key of ['warbird', 'javelin', 'spider', 'leviathan', 'terrier', 'weasel', 'lancaster', 'shark',
     'vanguard', 'aegis', 'reaper', 'phantom'])
     assert(SIM.SHIP_TYPES[key], 'ship type ' + key + ' exists');
 
-  // REDUX mechanics
+  // NOVA mechanics
   {
     const Wm = SIM.createWorld({ seed: 7, spawnPrizes: false });
     const van = SIM.makeShip(Wm, 'vanguard', 'local', 'Van', 45);
@@ -157,7 +157,7 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     g, g, g.document, g.localStorage, g.requestAnimationFrame,
     g.addEventListener, g.innerWidth, g.innerHeight, g.devicePixelRatio, g.setInterval, g.location);
 
-  const api = g.__continuum;
+  const api = g.__interstellar;
   assert(api, 'client exported hooks');
   const { G, startSolo, update, render, STEP } = api;
   assert(G.state === 'title', 'client boots to title');
@@ -224,7 +224,7 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     const html = await fetch('http://localhost:' + PORT + '/').then(r => r.text());
     assert(html.includes('client.js'), 'server serves index.html');
     const simSrc = await fetch('http://localhost:' + PORT + '/sim.js').then(r => r.text());
-    assert(simSrc.includes('CONTINUUM REDUX'), 'server serves sim.js');
+    assert(simSrc.includes('INTERSTELLAR'), 'server serves sim.js');
 
     // two real WebSocket clients (Node's built-in WebSocket)
     function client(name, ship) {

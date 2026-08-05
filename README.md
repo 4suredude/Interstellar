@@ -1,9 +1,11 @@
-# Continuum Redux
+# Interstellar
 
-A modern, from-scratch tribute to **SubSpace / Continuum** — the classic top-down
-inertial space combat game — rebuilt for the browser with neon rendering, bloom,
-particle effects, synthesized audio, the **full 8-ship roster**, and **real
-online multiplayer** via a zero-dependency Node server.
+**Interstellar** is a modern, from-scratch top-down space combat game for the
+browser — inertial flight, energy warfare, and zone chat, inspired by the
+classic **SubSpace / Continuum** but very much its own game: sprite-shaded
+ships with bloom and particles, synthesized audio, a **12-ship hangar**
+(8 classic-style hulls plus the new NOVA class), and **real online
+multiplayer** via a zero-dependency Node server.
 
 ![Combat](assets/combat.png)
 
@@ -29,7 +31,7 @@ events, kills, scores, and chat (**Enter** to talk) at 15–20 Hz with
 dead-reckoning interpolation for remote ships. Both sides run the same
 simulation code (`sim.js`) on the same map seed.
 
-## The hangar — 8 classic hulls + the new REDUX class
+## The hangar — 8 classic hulls + the new NOVA class
 
 ![Ship select](assets/select.png)
 
@@ -47,7 +49,7 @@ simulation code (`sim.js`) on the same map seed.
 Because this is the next iteration of the zone, a new generation of hulls
 joins the classic eight — each with a mechanic the originals never had:
 
-| REDUX ship | New mechanic |
+| NOVA ship | New mechanic |
 | --- | --- |
 | **Vanguard** | Ships factory MultiFire + ricochet rounds from spawn |
 | **Aegis** | Composite plating absorbs 28% of all incoming damage |

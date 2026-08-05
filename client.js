@@ -1,5 +1,5 @@
 /* =========================================================================
-   CONTINUUM REDUX — browser client
+   INTERSTELLAR — browser client
    Rendering (neon + bloom), input, menus, audio, and SubSpace-style
    relay netcode. All world simulation lives in sim.js (shared with the
    server); this file owns everything the player sees and hears.
@@ -1198,11 +1198,11 @@
     ctx.save();
     ctx.shadowColor = 'rgba(80,180,255,0.9)';
     ctx.shadowBlur = 34;
-    txt('CONTINUUM', vw / 2, vh / 2 - 70, 78, '#c8ecff', 'center', 800);
-    ctx.shadowColor = 'rgba(255,120,60,0.9)';
-    txt('R E D U X', vw / 2, vh / 2 - 20, 30, '#ffb27a', 'center', 700);
+    txt('INTERSTELLAR', vw / 2, vh / 2 - 70, 72, '#c8ecff', 'center', 800);
+    ctx.shadowColor = 'rgba(255,180,80,0.8)';
+    txt('T O P - D O W N   S P A C E   C O M B A T', vw / 2, vh / 2 - 26, 16, '#ffd9a0', 'center', 700);
     ctx.restore();
-    txt('a modern tribute to SubSpace / Continuum', vw / 2, vh / 2 + 14, 14, '#8aa', 'center');
+    txt('inspired by the classic SubSpace / Continuum', vw / 2, vh / 2 + 8, 13, '#7a8ca8', 'center');
     const blink = Math.sin(G.time * 4) > -0.3;
     if (blink) txt('ENTER — fly solo vs bots', vw / 2, vh / 2 + 66, 20, '#cff', 'center', 700);
     txt('O — online multiplayer', vw / 2, vh / 2 + 98, 17, '#8fd4a8', 'center', 700);
@@ -1249,9 +1249,9 @@
     }
 
     const t = SHIP_TYPES[SHIP_ORDER[G.sel]];
-    const isRedux = t.cls === 'redux';
-    txt(isRedux ? 'REDUX CLASS — NEW GENERATION' : 'CLASSIC HULL', vw / 2, cy + 88, 11,
-      isRedux ? '#fd8' : '#68a', 'center', 700);
+    const isNova = t.cls === 'nova';
+    txt(isNova ? 'NOVA CLASS — NEW GENERATION' : 'CLASSIC HULL', vw / 2, cy + 88, 11,
+      isNova ? '#fd8' : '#68a', 'center', 700);
     txt(t.label.toUpperCase(), vw / 2, cy + 116, 30, 'hsla(' + t.hue + ',90%,68%,1)', 'center', 800);
     txt((G.sel + 1) + ' / ' + n, vw / 2, cy + 136, 12, '#678', 'center');
     txt(t.desc, vw / 2, cy + 160, 14, '#abc', 'center', 500);
@@ -1340,16 +1340,16 @@
 
   // ---------------------------------------------------------------- persistence
   function loadBest() {
-    try { G.best = parseInt(GLOBAL.localStorage.getItem('continuum-redux-best') || '0', 10) || 0; } catch (e) { G.best = 0; }
+    try { G.best = parseInt(GLOBAL.localStorage.getItem('interstellar-best') || '0', 10) || 0; } catch (e) { G.best = 0; }
   }
   function saveBest() {
-    try { GLOBAL.localStorage.setItem('continuum-redux-best', String(G.best)); } catch (e) { }
+    try { GLOBAL.localStorage.setItem('interstellar-best', String(G.best)); } catch (e) { }
   }
   function loadName() {
-    try { return GLOBAL.localStorage.getItem('continuum-redux-name') || ''; } catch (e) { return ''; }
+    try { return GLOBAL.localStorage.getItem('interstellar-name') || ''; } catch (e) { return ''; }
   }
   function saveName(n) {
-    try { GLOBAL.localStorage.setItem('continuum-redux-name', n); } catch (e) { }
+    try { GLOBAL.localStorage.setItem('interstellar-name', n); } catch (e) { }
   }
 
   // ---------------------------------------------------------------- flow
@@ -1363,7 +1363,7 @@
     G.player = s;
     G.state = 'play';
     G.paused = false;
-    say('Welcome to Continuum Redux — good luck, pilot.', '#8df');
+    say('Welcome to Interstellar — good luck, pilot.', '#8df');
     say('Collect greens. Guard your energy. Everything costs it.', '#8df');
     return s;
   }
@@ -1541,7 +1541,7 @@
     GLOBAL.requestAnimationFrame(frame);
   }
 
-  GLOBAL.__continuum = { G, SIM, boot, startSolo, update, render, keys, handleNet, netConnect, STEP };
+  GLOBAL.__interstellar = { G, SIM, boot, startSolo, update, render, keys, handleNet, netConnect, STEP };
 
   if (GLOBAL.document && GLOBAL.document.getElementById) boot();
 })();
