@@ -1,46 +1,75 @@
 # Continuum Redux
 
 A modern, from-scratch tribute to **SubSpace / Continuum** — the classic top-down
-inertial space combat game — rebuilt for the browser with neon rendering,
-particle effects, synthesized audio, and AI pilots to fight.
+inertial space combat game — rebuilt for the browser with neon rendering, bloom,
+particle effects, synthesized audio, the **full 8-ship roster**, and **real
+online multiplayer** via a zero-dependency Node server.
 
 ![Combat](assets/combat.png)
 
-## Play
+## Play solo (no install)
 
-No build step, no dependencies. Either:
+Open `index.html` in any modern browser. Press **Enter**, pick a ship, and
+you're in a zone against 10 AI pilots.
 
-- open `index.html` directly in any modern browser, or
-- serve the folder (`npx serve .` or `python3 -m http.server`) and visit it.
+## Play online (multiplayer)
 
-Press **Enter**, pick a ship, and you're in the zone.
+```sh
+node server.js            # one command, zero npm dependencies
+```
+
+Everyone opens `http://<host>:8666` and presses **O — Online multiplayer**.
+Pick a callsign and a ship, and you're all in the same zone together with the
+server's bots. `PORT=9000 BOTS=4 node server.js` to customize. A different
+server can be targeted with `?server=host:port` in the URL.
+
+The netcode is SubSpace-style relay, like the original: each client owns its
+ship, the server authoritatively runs bots and prizes and relays state, fire
+events, kills, scores, and chat (**Enter** to talk) at 15–20 Hz with
+dead-reckoning interpolation for remote ships. Both sides run the same
+simulation code (`sim.js`) on the same map seed.
+
+## The full hangar — all 8 classic hulls
 
 ![Ship select](assets/select.png)
 
+| Ship | Character |
+| --- | --- |
+| **Warbird** | The classic duelist — heavy single shots |
+| **Javelin** | Bomber with bouncing splash artillery |
+| **Spider** | Rapid-fire bullet hose, monster recharge |
+| **Leviathan** | Slow dreadnought, colossal energy, L3 bombs |
+| **Terrier** | Fastest interceptor in the zone |
+| **Weasel** | Tiny assassin — off enemy radar, dim to the eye |
+| **Lancaster** | Batwing all-rounder with dependable guns |
+| **Shark** | Support hunter with a self-restocking repel rack |
+
 ## What's faithful to SubSpace
 
-- **Inertial flight** — no friction, no brakes. Thrust and rotation only; momentum is the game.
-- **Energy warfare** — one bar is your shields *and* your ammo. Firing costs energy,
-  getting hit drains it, and when a hit lands with nothing left, you explode.
-- **Leveled weapons** — L1–L3 bullets (color-coded), bombs with splash, knockback,
-  proximity fuses, wall bounces, and self-damage (your own bombs hurt — tradition).
-- **Greens** — anonymous prize boxes scattered through the zone: gun/bomb upgrades,
-  MultiFire, bouncing bullets, repels, bursts, rockets, energy/recharge/thrust boosts.
-- **Repel / Burst / Rocket** specials, ricocheting ships, the corner radar with the
-  whole map, green kill-feed chat, bounty, and full loadout reset on death.
-- **Four classic hulls** — Warbird (heavy shots), Javelin (bomber), Spider (bullet
-  hose), Terrier (interceptor) — each with distinct stats and silhouettes.
+- **Inertial flight** — no friction, no brakes; ships ricochet off walls.
+- **Energy warfare** — one bar is shields *and* ammo; a hit that lands with
+  nothing left kills you.
+- **Leveled weapons** — L1–L3 color-coded bullets and bombs with splash,
+  knockback, proximity fuses, wall bounces, and traditional self-damage.
+- **Greens** — anonymous prize boxes: gun/bomb upgrades, MultiFire, bouncing
+  bullets, repels, bursts, rockets, energy/recharge/thrust/speed boosts.
+- **Repel / Burst / Rocket** specials, corner radar, green kill-feed chat,
+  bounty, and full loadout reset on death.
 
 ## What's modernized
 
-- Neon vector renderer: glow sprites, additive particles, shockwaves, screen shake,
-  parallax starfield and nebulae, damage vignette, prerendered tile map.
-- Synthesized WebAudio SFX (no assets) with distance attenuation.
-- 10 AI pilots with target leading, wall avoidance, dodging, fleeing, repel/burst
-  usage, and prize hunting — the zone fights on its own (watch the attract mode
-  behind the title screen).
-- Fixed-timestep simulation, resolution-independent HiDPI canvas, live leaderboard,
-  local best-score persistence.
+![Online multiplayer](assets/online.png)
+
+- Neon renderer with **bloom post-processing**, gradient-lit hulls, cockpit
+  bubbles, engine flames with white-hot cores, motion trails, debris and
+  shockwave explosions, hex spawn shields, glowing bevelled walls, parallax
+  starfield with structured nebulae, and screen shake.
+- Synthesized WebAudio SFX (no asset files) with distance attenuation.
+- AI pilots with target leading, wall avoidance, dodging, fleeing, repel/burst
+  usage, and prize hunting — the zone fights on with or without you (watch the
+  attract mode behind the title screen).
+- Fixed-timestep simulation decoupled from rendering, HiDPI canvas, live
+  leaderboard, persistent best score and callsign.
 
 ## Controls
 
@@ -55,25 +84,26 @@ Press **Enter**, pick a ship, and you're in the zone.
 | `Q` | Burst |
 | `R` | Rocket |
 | `X` | Toggle MultiFire |
-| `P` / `Esc` | Pause |
+| `Enter` | Chat (online) |
+| `P` / `Esc` | Pause / menu |
 | `M` | Mute · `F` Fullscreen |
 
-## Development
+## Architecture
 
-The whole game is `game.js` (plain ES2017, no framework) plus a one-page shell.
-A headless smoke test drives the real game code under Node with a stubbed DOM,
-simulates 90 seconds of combat, and asserts the world stays sane:
+| File | Role |
+| --- | --- |
+| `sim.js` | Shared simulation core (UMD): map gen, ships, weapons, AI, damage. No DOM. Runs in browser and Node. |
+| `client.js` | Renderer, input, menus, audio, netcode client. |
+| `server.js` | Zero-dependency zone server: static hosting + hand-rolled RFC 6455 WebSocket endpoint + authoritative bots/prizes + relay. |
+| `dev/smoke.js` | Headless test: 90 s sim combat, stub-DOM client run, and a real server with two WebSocket clients exercising the whole protocol. |
 
 ```sh
-node dev/smoke.js
+node dev/smoke.js         # run all three test layers
 ```
-
-The simulation is deterministic-timestep and fully decoupled from rendering and
-input, so a future multiplayer netcode layer can drive the same entity state.
 
 ## Roadmap ideas
 
 - Mines, decoys, portals, and thors
 - Team frequencies, flag and powerball (soccer) modes
-- Real multiplayer via WebSocket zones
+- Server-side anti-cheat validation (the relay model trusts clients, as the original did)
 - Gamepad and touch controls
