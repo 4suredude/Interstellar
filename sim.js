@@ -44,7 +44,8 @@
   // ------------------------------------------------------------ ship types
   // Full classic SubSpace roster. Visual fields (shape/accent/deco/cockpit/
   // engines) are unit-space polygons scaled by radius at draw time, nose +x.
-  const SHIP_ORDER = ['warbird', 'javelin', 'spider', 'leviathan', 'terrier', 'weasel', 'lancaster', 'shark'];
+  const SHIP_ORDER = ['warbird', 'javelin', 'spider', 'leviathan', 'terrier', 'weasel', 'lancaster', 'shark',
+    'vanguard', 'aegis', 'reaper', 'phantom'];
   const SHIP_TYPES = {
     warbird: {
       label: 'Warbird', hue: 192,
@@ -141,6 +142,55 @@
       accent: [[0.9, 0], [0.05, 0.25], [-0.25, 0], [0.05, -0.25]],
       deco: [[[0.15, 0.38], [-0.4, 0.75]], [[0.15, -0.38], [-0.4, -0.75]]],
       cockpit: [0.3, 0, 0.17, 0.12], engines: [[-0.68, 0]],
+    },
+    // ---- REDUX class: the new generation ----
+    vanguard: {
+      label: 'Vanguard', hue: 45, cls: 'redux',
+      desc: 'REDUX gunship. Ships MultiFire and ricochet rounds straight from the factory.',
+      maxEnergy: 1450, recharge: 110, thrust: 240, maxSpeed: 345, turn: 3.5,
+      radius: 11, bounce: 0.6, startMulti: true, startBounce: true,
+      gunLevel: 2, gunDelay: 0.4, gunCost: 130, gunSpeed: 640, gunDmgMul: 0.95,
+      bombLevel: 1, bombDelay: 2.4, bombCost: 430, bombSpeed: 310,
+      shape: [[1.3, 0], [0.35, 0.3], [0.0, 0.95], [-0.55, 0.75], [-0.35, 0.25], [-0.85, 0.45], [-0.7, 0], [-0.85, -0.45], [-0.35, -0.25], [-0.55, -0.75], [0.0, -0.95], [0.35, -0.3]],
+      accent: [[1.0, 0], [0.2, 0.18], [-0.3, 0], [0.2, -0.18]],
+      deco: [[[0.1, 0.6], [-0.4, 0.62]], [[0.1, -0.6], [-0.4, -0.62]]],
+      cockpit: [0.35, 0, 0.18, 0.11], engines: [[-0.75, 0.18], [-0.75, -0.18]],
+    },
+    aegis: {
+      label: 'Aegis', hue: 215, cls: 'redux',
+      desc: 'REDUX bastion. Composite plating shrugs off a quarter of all damage.',
+      maxEnergy: 1900, recharge: 100, thrust: 190, maxSpeed: 300, turn: 2.8,
+      radius: 13, bounce: 0.45, armor: 0.72, repelStart: 2,
+      gunLevel: 1, gunDelay: 0.5, gunCost: 120, gunSpeed: 600, gunDmgMul: 0.9,
+      bombLevel: 2, bombDelay: 2.4, bombCost: 470, bombSpeed: 300,
+      shape: [[0.95, 0], [0.55, 0.75], [-0.35, 1.0], [-0.95, 0.6], [-0.95, -0.6], [-0.35, -1.0], [0.55, -0.75]],
+      accent: [[0.85, 0], [0.3, 0.5], [0.1, 0], [0.3, -0.5]],
+      deco: [[[-0.15, 0.8], [-0.8, 0.5]], [[-0.15, -0.8], [-0.8, -0.5]]],
+      cockpit: [0.2, 0, 0.22, 0.17], engines: [[-0.85, 0.3], [-0.85, -0.3]],
+    },
+    reaper: {
+      label: 'Reaper', hue: 275, cls: 'redux',
+      desc: 'REDUX leech. Every hit you land feeds stolen energy back to your banks.',
+      maxEnergy: 1350, recharge: 85, thrust: 235, maxSpeed: 355, turn: 3.7,
+      radius: 11, bounce: 0.6, leech: 0.3,
+      gunLevel: 2, gunDelay: 0.5, gunCost: 140, gunSpeed: 650, gunDmgMul: 1.0,
+      bombLevel: 1, bombDelay: 2.6, bombCost: 450, bombSpeed: 310,
+      shape: [[1.25, 0], [0.15, 0.35], [-0.2, 1.05], [-0.75, 0.8], [-0.45, 0.25], [-0.7, 0], [-0.45, -0.25], [-0.75, -0.8], [-0.2, -1.05], [0.15, -0.35]],
+      accent: [[0.9, 0], [0.05, 0.22], [-0.35, 0], [0.05, -0.22]],
+      deco: [[[0.0, 0.5], [-0.55, 0.85]], [[0.0, -0.5], [-0.55, -0.85]]],
+      cockpit: [0.3, 0, 0.16, 0.11], engines: [[-0.55, 0]],
+    },
+    phantom: {
+      label: 'Phantom', hue: 320, cls: 'redux',
+      desc: 'REDUX blink-fighter. R warps you 240m forward — straight through walls.',
+      maxEnergy: 1200, recharge: 125, thrust: 260, maxSpeed: 390, turn: 4.4,
+      radius: 10, bounce: 0.65, blink: true,
+      gunLevel: 1, gunDelay: 0.26, gunCost: 70, gunSpeed: 660, gunDmgMul: 0.7,
+      bombLevel: 1, bombDelay: 3.0, bombCost: 500, bombSpeed: 320,
+      shape: [[1.2, 0], [0.5, 0.22], [-0.1, 0.85], [-0.8, 0.6], [-0.5, 0.18], [-0.5, -0.18], [-0.8, -0.6], [-0.1, -0.85], [0.5, -0.22]],
+      accent: [[0.95, 0], [0.3, 0.15], [-0.1, 0], [0.3, -0.15]],
+      deco: [[[0.2, 0.4], [-0.55, 0.55]], [[0.2, -0.4], [-0.55, -0.55]]],
+      cockpit: [0.4, 0, 0.15, 0.09], engines: [[-0.6, 0.35], [-0.6, -0.35]],
     },
   };
 
@@ -300,7 +350,8 @@
     s.maxEnergy = t.maxEnergy; s.recharge = t.recharge;
     s.thrust = t.thrust; s.maxSpeed = t.maxSpeed;
     s.gunLevel = t.gunLevel; s.bombLevel = t.bombLevel;
-    s.multi = false; s.multiOn = false; s.bounceBullets = false;
+    s.multi = !!t.startMulti; s.multiOn = !!t.startMulti;
+    s.bounceBullets = !!t.startBounce;
     s.repels = t.repelStart || 1; s.bursts = 1; s.rockets = 0;
     s.bounty = 0;
   }
@@ -314,7 +365,7 @@
       hue: hue == null ? t.hue : hue,
       x: WORLD / 2, y: WORLD / 2, vx: 0, vy: 0, angle: rand(0, TAU),
       energy: t.maxEnergy,
-      gunCd: 0, bombCd: 0, repelCd: 0, burstCd: 0, rocketT: 0, regenT: 0,
+      gunCd: 0, bombCd: 0, repelCd: 0, burstCd: 0, rocketT: 0, regenT: 0, blinkCd: 0,
       dead: false, respawn: 0, safe: 0, flash: 0,
       kills: 0, deaths: 0, score: 0,
       ctl: { turn: 0, thrust: 0, gun: false, bomb: false },
@@ -505,13 +556,34 @@
     return true;
   }
 
+  function doBlink(W, s) {
+    if (!s.t.blink || s.blinkCd > 0 || s.dead) return false;
+    if (s.energy <= 350) return false;
+    const r = s.t.radius;
+    const nx = s.x + Math.cos(s.angle) * 240;
+    const ny = s.y + Math.sin(s.angle) * 240;
+    if (nx < TILE * 2 + r || ny < TILE * 2 + r || nx > WORLD - TILE * 2 - r || ny > WORLD - TILE * 2 - r) return false;
+    if (rectSolid(W, nx - r, ny - r, r * 2, r * 2)) return false;
+    s.energy -= 350; s.blinkCd = 5; s.safe = 0;
+    const x0 = s.x, y0 = s.y;
+    s.x = nx; s.y = ny;
+    ev(W, { e: 'blink', id: s.id, x0, y0, x1: nx, y1: ny, hue: s.hue });
+    return true;
+  }
+
   // ------------------------------------------------------------ damage
   function damageShip(W, v, dmg, att) {
     if (v.dead || v.safe > 0) return;
-    ev(W, { e: 'hit', x: v.x, y: v.y, hue: v.hue, id: v.id, dmg });
+    if (v.t.armor) dmg *= v.t.armor;
+    ev(W, { e: 'hit', x: v.x, y: v.y, hue: v.hue, id: v.id, dmg, att: att ? att.id : 0 });
     if (v.remote) return; // their owner computes real damage
     v.energy -= dmg;
     v.flash = 0.12;
+    // reaper leech: local attackers are credited here; remote attackers are
+    // credited over the wire via the 'hit' event -> leech message
+    if (att && att !== v && !att.dead && !att.remote && att.t.leech) {
+      att.energy = Math.min(att.maxEnergy, att.energy + dmg * att.t.leech);
+    }
     if (v.energy < 0) killShip(W, v, att);
   }
   function killShip(W, v, att) {
@@ -617,6 +689,8 @@
     } else if (a.mode === 'flee' && t) {
       desired = Math.atan2(s.y - t.y, s.x - t.x); th = 1;
       if (dist2(s, t) < 240 && s.repels > 0 && s.repelCd <= 0) doRepel(W, s);
+      if (s.t.blink && s.blinkCd <= 0 && s.energy > 600 &&
+          Math.abs(angleNorm(desired - s.angle)) < 0.4) doBlink(W, s);
       if (s.rockets > 0 && s.rocketT <= 0) fireRocket(W, s);
     } else {
       if (!a.wp || hyp(a.wp.x - s.x, a.wp.y - s.y) < 90) {
@@ -706,7 +780,7 @@
     s.y = clamp(s.y, TILE * 2 + r, WORLD - TILE * 2 - r);
 
     s.energy = Math.min(s.maxEnergy, s.energy + s.recharge * dt);
-    s.gunCd -= dt; s.bombCd -= dt; s.repelCd -= dt; s.burstCd -= dt;
+    s.gunCd -= dt; s.bombCd -= dt; s.repelCd -= dt; s.burstCd -= dt; s.blinkCd -= dt;
     if (s.safe > 0) s.safe -= dt;
     if (s.flash > 0) s.flash -= dt;
 
@@ -838,7 +912,7 @@
     tileSolid, solidAtPx, rectSolid, losClear, randClearPoint, findSpawn,
     createWorld, makeShip, removeShip, spawnShip, addBots,
     applyLoadoutDefaults, applyPrize, addPrize, removePrizeById,
-    fireGun, fireBomb, doRepel, doBurst, fireRocket,
+    fireGun, fireBomb, doRepel, doBurst, fireRocket, doBlink,
     injectGun, injectBomb, injectRepel, injectBurst,
     damageShip, killShip, explode,
     updateWorld, drainEvents,

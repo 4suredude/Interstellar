@@ -213,6 +213,20 @@ function onMessage(cl, msg) {
       else if (msg.kind === 'bomb') SIM.injectBomb(W, s, msg);
       else if (msg.kind === 'burst') SIM.injectBurst(W, s, msg);
       else if (msg.kind === 'repel') SIM.injectRepel(W, s, msg);
+      // 'blink' is FX-only: ghost position catches up via state reports
+      break;
+    }
+    case 'leech': {
+      // a victim crediting a reaper for stolen energy
+      const target = W.byId.get(msg.to | 0);
+      const amount = Math.min(600, Math.max(0, +msg.amount || 0));
+      if (!target || !target.t.leech || !amount) return;
+      if (target.bot) {
+        target.energy = Math.min(target.maxEnergy, target.energy + amount);
+      } else {
+        const tcl = [...clients].find(c => c.id === target.id);
+        if (tcl) sendTo(tcl, { t: 'leech', amount });
+      }
       break;
     }
     case 'death': {
@@ -295,6 +309,18 @@ setInterval(() => {
       case 'repel':
         broadcast({ t: 'fire', kind: 'repel', id: e.id, x: e.x, y: e.y });
         break;
+      case 'blink':
+        broadcast({ t: 'fire', kind: 'blink', id: e.id, x0: e.x0, y0: e.y0, x1: e.x1, y1: e.y1, hue: e.hue });
+        break;
+      case 'hit': {
+        // bots damaged by a remote reaper: credit the stolen energy back
+        const att = W.byId.get(e.att);
+        if (att && att.remote && att.t.leech) {
+          const acl = [...clients].find(c => c.id === att.id);
+          if (acl) sendTo(acl, { t: 'leech', amount: Math.round(e.dmg * att.t.leech) });
+        }
+        break;
+      }
       case 'kill': {
         // a bot died in the server sim
         broadcast({ t: 'death', id: e.victim, killer: e.killer, bounty: e.bounty });

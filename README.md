@@ -29,7 +29,7 @@ events, kills, scores, and chat (**Enter** to talk) at 15–20 Hz with
 dead-reckoning interpolation for remote ships. Both sides run the same
 simulation code (`sim.js`) on the same map seed.
 
-## The full hangar — all 8 classic hulls
+## The hangar — 8 classic hulls + the new REDUX class
 
 ![Ship select](assets/select.png)
 
@@ -44,6 +44,16 @@ simulation code (`sim.js`) on the same map seed.
 | **Lancaster** | Batwing all-rounder with dependable guns |
 | **Shark** | Support hunter with a self-restocking repel rack |
 
+Because this is the next iteration of the zone, a new generation of hulls
+joins the classic eight — each with a mechanic the originals never had:
+
+| REDUX ship | New mechanic |
+| --- | --- |
+| **Vanguard** | Ships factory MultiFire + ricochet rounds from spawn |
+| **Aegis** | Composite plating absorbs 28% of all incoming damage |
+| **Reaper** | Leeches 30% of the damage it deals back as energy |
+| **Phantom** | Blink drive: `R` teleports 240m forward — straight through walls |
+
 ## What's faithful to SubSpace
 
 - **Inertial flight** — no friction, no brakes; ships ricochet off walls.
@@ -56,14 +66,24 @@ simulation code (`sim.js`) on the same map seed.
 - **Repel / Burst / Rocket** specials, corner radar, green kill-feed chat,
   bounty, and full loadout reset on death.
 
-## What's modernized
+## The look — honoring the original, then modernizing it
 
 ![Online multiplayer](assets/online.png)
 
-- Neon renderer with **bloom post-processing**, gradient-lit hulls, cockpit
-  bubbles, engine flames with white-hot cores, motion trails, debris and
-  shockwave explosions, hex spawn shields, glowing bevelled walls, parallax
-  starfield with structured nebulae, and screen shake.
+- Ships are **solid, metallic, shaded craft** rendered through **36-frame
+  rotation sprite atlases with fixed top-left lighting** — the same
+  pre-rendered-sprite feel (and rotation snap) the original had, drawn
+  procedurally with hull plates, team-color accents, panel seams, engine
+  nozzles, and cockpit glass with specular glints.
+- Maps are **solid chunky bevelled tiles** with per-tile tonal variation and
+  rock speckle, edged with a faint energized rim — steel and stone, not
+  wireframe.
+- Bullets and bombs use the original's **level colors** (L1 red-orange,
+  L2 yellow, L3 blue); space is near-black with a whisper of nebula.
+- On top of that, the modern layer: subtle bloom post-processing, engine
+  flames with white-hot cores, motion trails, debris and shockwave
+  explosions, muzzle flashes, hex spawn shields, blink warp effects, and
+  screen shake.
 - Synthesized WebAudio SFX (no asset files) with distance attenuation.
 - AI pilots with target leading, wall avoidance, dodging, fleeing, repel/burst
   usage, and prize hunting — the zone fights on with or without you (watch the
@@ -82,7 +102,7 @@ simulation code (`sim.js`) on the same map seed.
 | `Shift` / `B` | Bomb |
 | `E` | Repel |
 | `Q` | Burst |
-| `R` | Rocket |
+| `R` | Rocket (Blink on the Phantom) |
 | `X` | Toggle MultiFire |
 | `Enter` | Chat (online) |
 | `P` / `Esc` | Pause / menu |

@@ -92,6 +92,11 @@
   const sndRocket = () => noiseHit(1.6, 0.22, 900, 300);
   const sndBeep = () => tone('square', 880, 880, 0.06, 0.1);
   const sndChat = () => tone('sine', 520, 520, 0.05, 0.08);
+  const sndBlink = (x, y) => {
+    const v = worldVol(x, y, 0.28); if (v < 0.01) return;
+    tone('sine', 300, 1400, 0.12, v);
+    tone('sine', 1400, 250, 0.18, v * 0.7, 0.1);
+  };
 
   // ---------------------------------------------------------------- messages
   function say(text, color) {
@@ -128,6 +133,22 @@
   function flash(x, y, size, hue) {
     G.parts.push({ x, y, vx: 0, vy: 0, life: 0.09, max: 0.09, hue, kind: 'flash', size });
   }
+  function blinkFX(x0, y0, x1, y1, hue) {
+    G.waves.push({ x: x0, y: y0, r: 4, maxR: 55, t: 0, dur: 0.3, hue });
+    G.waves.push({ x: x1, y: y1, r: 30, maxR: 6, t: 0, dur: 0.3, hue });
+    puff(x0, y0, hue, 8, 90, 10);
+    puff(x1, y1, hue, 8, 90, 10);
+    // streak of afterimages along the jump
+    for (let i = 0; i < 6; i++) {
+      const t = i / 6;
+      G.parts.push({
+        x: x0 + (x1 - x0) * t, y: y0 + (y1 - y0) * t,
+        vx: 0, vy: 0, life: 0.25 + t * 0.1, max: 0.35, hue, kind: 'flash', size: 26,
+      });
+    }
+    sndBlink(x1, y1);
+  }
+
   function boomFX(x, y, r, hue, big) {
     spark(x, y, hue, big ? 24 : 12, big ? 380 : 260);
     puff(x, y, 25, big ? 12 : 6, 120, big ? 26 : 14);
@@ -155,9 +176,14 @@
           break;
         case 'bomb':
           sndBomb(e.x, e.y);
-          flash(e.x, e.y, 30, 310);
+          flash(e.x, e.y, 30, BOMB_HUES[e.level] || 4);
           if (mine && G.online) netSend({ t: 'fire', kind: 'bomb', x: e.x, y: e.y, vx: e.vx, vy: e.vy, level: e.level, bounces: e.bounces });
           break;
+        case 'blink': {
+          blinkFX(e.x0, e.y0, e.x1, e.y1, e.hue);
+          if (mine && G.online) netSend({ t: 'fire', kind: 'blink', x0: e.x0, y0: e.y0, x1: e.x1, y1: e.y1, hue: e.hue });
+          break;
+        }
         case 'burst': {
           G.waves.push({ x: e.x, y: e.y, r: 6, maxR: 90, t: 0, dur: 0.25, hue: 60 });
           sndBoom(e.x, e.y, false);
@@ -172,13 +198,19 @@
         case 'rocket':
           if (mine) sndRocket();
           break;
-        case 'hit':
+        case 'hit': {
           spark(e.x, e.y, e.hue, 6, 220);
           if (mine) {
             G.shake = Math.min(16, G.shake + e.dmg / 55);
             G.hitFlash = Math.min(0.5, G.hitFlash + e.dmg / 1600);
+            // credit remote reapers for the energy they stole from us
+            if (G.online) {
+              const att = W.byId.get(e.att);
+              if (att && att.remote && att.t.leech) netSend({ t: 'leech', to: e.att, amount: Math.round(e.dmg * att.t.leech) });
+            }
           }
           break;
+        }
         case 'bhit':
           spark(e.x, e.y, 45, 4, 150);
           break;
@@ -325,6 +357,15 @@
         else if (msg.kind === 'bomb') { SIM.injectBomb(W, o, msg); sndBomb(msg.x, msg.y); }
         else if (msg.kind === 'burst') { SIM.injectBurst(W, o, msg); G.waves.push({ x: msg.x, y: msg.y, r: 6, maxR: 90, t: 0, dur: 0.25, hue: 60 }); }
         else if (msg.kind === 'repel') { SIM.injectRepel(W, o, msg); G.waves.push({ x: msg.x, y: msg.y, r: 10, maxR: 230, t: 0, dur: 0.35, hue: 200 }); sndRepel(msg.x, msg.y); }
+        else if (msg.kind === 'blink') { blinkFX(msg.x0, msg.y0, msg.x1, msg.y1, msg.hue || o.hue); }
+        break;
+      }
+      case 'leech': {
+        if (G.player && !G.player.dead) {
+          const amt = Math.min(600, Math.max(0, +msg.amount || 0));
+          G.player.energy = Math.min(G.player.maxEnergy, G.player.energy + amt);
+          spark(G.player.x, G.player.y, 275, 4, 120);
+        }
         break;
       }
       case 'death': {
@@ -390,37 +431,57 @@
     const big = doc.createElement('canvas');
     big.width = WORLD; big.height = WORLD;
     const c = big.getContext('2d');
-    // pass 1: glow bleed behind the walls
+    // Solid, chunky, bevelled tiles — the original's maps were rock and
+    // steel, not wireframes. Deterministic per-tile hash varies the tone.
+    const hash = (x, y) => {
+      let h = (x * 374761393 + y * 668265263) | 0;
+      h = (h ^ (h >> 13)) * 1274126177 | 0;
+      return ((h ^ (h >> 16)) >>> 0) / 4294967296;
+    };
+    // faint outer glow bleed so walls read against the void (subtle)
     c.save();
-    c.shadowColor = 'rgba(70,130,255,0.55)';
-    c.shadowBlur = 14;
-    c.fillStyle = '#101a33';
+    c.shadowColor = 'rgba(70,120,220,0.35)';
+    c.shadowBlur = 8;
+    c.fillStyle = '#151c30';
     for (let ty = 0; ty < MAPS; ty++)
       for (let tx = 0; tx < MAPS; tx++)
         if (SIM.tileSolid(W, tx, ty)) c.fillRect(tx * TILE, ty * TILE, TILE, TILE);
     c.restore();
-    // pass 2: bevel + edge neon
     for (let ty = 0; ty < MAPS; ty++) {
       for (let tx = 0; tx < MAPS; tx++) {
         if (!SIM.tileSolid(W, tx, ty)) continue;
         const x = tx * TILE, y = ty * TILE;
-        c.fillStyle = '#131d38';
+        const h0 = hash(tx, ty);
+        const lit = 20 + h0 * 7;                       // per-tile tonal variation
+        const hue = 222 + (hash(tx + 7, ty + 3) - 0.5) * 14;
+        c.fillStyle = 'hsl(' + hue + ',26%,' + lit + '%)';
         c.fillRect(x, y, TILE, TILE);
-        const bev = c.createLinearGradient(x, y, x, y + TILE);
-        bev.addColorStop(0, 'rgba(120,160,255,0.16)');
-        bev.addColorStop(0.5, 'rgba(20,30,60,0.0)');
-        bev.addColorStop(1, 'rgba(0,0,10,0.35)');
-        c.fillStyle = bev;
-        c.fillRect(x, y, TILE, TILE);
-        c.fillStyle = 'rgba(8,12,26,0.9)';
-        c.fillRect(x + 4, y + 4, TILE - 8, TILE - 8);
-        c.strokeStyle = 'rgba(110,165,255,0.95)';
-        c.lineWidth = 1.5;
+        // classic bevel: light top/left, dark bottom/right
+        const openU = !SIM.tileSolid(W, tx, ty - 1), openD = !SIM.tileSolid(W, tx, ty + 1);
+        const openL = !SIM.tileSolid(W, tx - 1, ty), openR = !SIM.tileSolid(W, tx + 1, ty);
+        c.fillStyle = 'hsla(' + hue + ',30%,' + (lit + 22) + '%,' + (openU ? 0.9 : 0.25) + ')';
+        c.fillRect(x, y, TILE, 2);
+        c.fillStyle = 'hsla(' + hue + ',30%,' + (lit + 18) + '%,' + (openL ? 0.8 : 0.2) + ')';
+        c.fillRect(x, y, 2, TILE);
+        c.fillStyle = 'rgba(2,4,10,' + (openD ? 0.75 : 0.3) + ')';
+        c.fillRect(x, y + TILE - 2, TILE, 2);
+        c.fillStyle = 'rgba(2,4,10,' + (openR ? 0.65 : 0.25) + ')';
+        c.fillRect(x + TILE - 2, y, 2, TILE);
+        // speckled rock texture
+        for (let k = 0; k < 4; k++) {
+          const sx = x + 2 + hash(tx * 5 + k, ty * 9 + k) * (TILE - 5);
+          const sy = y + 2 + hash(tx * 11 + k, ty * 3 + k) * (TILE - 5);
+          c.fillStyle = hash(tx + k, ty - k) > 0.5 ? 'rgba(0,0,8,0.28)' : 'rgba(160,190,255,0.08)';
+          c.fillRect(sx, sy, 1.6, 1.6);
+        }
+        // thin energized rim only where the wall faces open space
+        c.strokeStyle = 'rgba(120,170,255,0.35)';
+        c.lineWidth = 1;
         c.beginPath();
-        if (!SIM.tileSolid(W, tx, ty - 1)) { c.moveTo(x, y + 0.75); c.lineTo(x + TILE, y + 0.75); }
-        if (!SIM.tileSolid(W, tx, ty + 1)) { c.moveTo(x, y + TILE - 0.75); c.lineTo(x + TILE, y + TILE - 0.75); }
-        if (!SIM.tileSolid(W, tx - 1, ty)) { c.moveTo(x + 0.75, y); c.lineTo(x + 0.75, y + TILE); }
-        if (!SIM.tileSolid(W, tx + 1, ty)) { c.moveTo(x + TILE - 0.75, y); c.lineTo(x + TILE - 0.75, y + TILE); }
+        if (openU) { c.moveTo(x, y + 0.5); c.lineTo(x + TILE, y + 0.5); }
+        if (openD) { c.moveTo(x, y + TILE - 0.5); c.lineTo(x + TILE, y + TILE - 0.5); }
+        if (openL) { c.moveTo(x + 0.5, y); c.lineTo(x + 0.5, y + TILE); }
+        if (openR) { c.moveTo(x + TILE - 0.5, y); c.lineTo(x + TILE - 0.5, y + TILE); }
         c.stroke();
       }
     }
@@ -588,9 +649,10 @@
   }
 
   function drawBackdrop() {
+    // near-black space, like the original — the nebulae are a whisper, not a wash
     const sky = ctx.createRadialGradient(vw / 2, vh / 2, 0, vw / 2, vh / 2, Math.max(vw, vh) * 0.75);
-    sky.addColorStop(0, '#0a0e1e');
-    sky.addColorStop(1, '#03040a');
+    sky.addColorStop(0, '#070a14');
+    sky.addColorStop(1, '#020308');
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, vw, vh);
     ctx.globalCompositeOperation = 'lighter';
@@ -598,7 +660,7 @@
       const px = nb.x - G.cam.x * 0.14, py = nb.y - G.cam.y * 0.14;
       const wx = ((px % (vw + 1100)) + vw + 1100) % (vw + 1100) - 550;
       const wy = ((py % (vh + 1100)) + vh + 1100) % (vh + 1100) - 550;
-      ctx.globalAlpha = nb.a;
+      ctx.globalAlpha = nb.a * 0.45;
       ctx.drawImage(nb.c, wx - nb.r, wy - nb.r, nb.r * 2, nb.r * 2);
     }
     ctx.globalAlpha = 1;
@@ -613,90 +675,167 @@
   }
 
   // ---------------------------------------------------------------- ship art
-  function tracePoly(pts, r) {
-    ctx.beginPath();
-    ctx.moveTo(pts[0][0] * r, pts[0][1] * r);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0] * r, pts[i][1] * r);
-    ctx.closePath();
+  // Honors the original Continuum look: ships are solid, metallic, shaded
+  // craft lit from the screen's top-left, rendered through a 36-frame
+  // rotation atlas — exactly how the original's pre-rendered sprites felt.
+  const ROT_FRAMES = 36;
+
+  function tracePolyOn(g, pts, r) {
+    g.beginPath();
+    g.moveTo(pts[0][0] * r, pts[0][1] * r);
+    for (let i = 1; i < pts.length; i++) g.lineTo(pts[i][0] * r, pts[i][1] * r);
+    g.closePath();
   }
-  function drawShipBody(t, hue, r, opts) {
-    opts = opts || {};
-    // hull with front-lit gradient
-    tracePoly(t.shape, r);
-    const g = ctx.createLinearGradient(r, 0, -r, 0);
-    g.addColorStop(0, 'hsla(' + hue + ',75%,' + (opts.flash ? 90 : 42) + '%,0.98)');
-    g.addColorStop(0.45, 'hsla(' + hue + ',70%,' + (opts.flash ? 70 : 20) + '%,0.97)');
-    g.addColorStop(1, 'hsla(' + hue + ',60%,' + (opts.flash ? 55 : 9) + '%,0.96)');
-    ctx.fillStyle = g;
-    ctx.fill();
-    ctx.lineWidth = 1.8;
-    ctx.strokeStyle = opts.flash ? '#fff' : 'hsla(' + hue + ',95%,66%,1)';
-    ctx.stroke();
-    // accent panel
+  function centroid(pts) {
+    let x = 0, y = 0;
+    for (const p of pts) { x += p[0]; y += p[1]; }
+    return [x / pts.length, y / pts.length];
+  }
+  function insetPoly(pts, k) {
+    const [cx, cy] = centroid(pts);
+    return pts.map(p => [cx + (p[0] - cx) * k, cy + (p[1] - cy) * k]);
+  }
+  // draw a fully shaded ship at any size; `lightA` is the light direction
+  // in LOCAL ship space (pass -shipAngle - 3π/4 for fixed top-left world light)
+  function drawShipGeometry(g, t, hue, r, lightA) {
+    const lx = Math.cos(lightA), ly = Math.sin(lightA);
+    const metal = (sat, lo, hi) => {
+      const grad = g.createLinearGradient(lx * r, ly * r, -lx * r, -ly * r);
+      grad.addColorStop(0, 'hsl(' + hue + ',' + sat + '%,' + hi + '%)');
+      grad.addColorStop(0.55, 'hsl(' + hue + ',' + sat + '%,' + ((hi + lo) / 2 | 0) + '%)');
+      grad.addColorStop(1, 'hsl(' + hue + ',' + sat + '%,' + lo + '%)');
+      return grad;
+    };
+    // drop shadow pass — grounds the sprite like the originals
+    g.save();
+    g.translate(r * 0.08, r * 0.11);
+    tracePolyOn(g, t.shape, r);
+    g.fillStyle = 'rgba(0,0,5,0.35)';
+    g.fill();
+    g.restore();
+    // hull
+    tracePolyOn(g, t.shape, r);
+    g.fillStyle = metal(38, 22, 62);
+    g.fill();
+    g.lineWidth = Math.max(1, r * 0.07);
+    g.strokeStyle = 'rgba(6,9,18,0.8)';
+    g.stroke();
+    // raised plate deck
+    tracePolyOn(g, insetPoly(t.shape, 0.62), r);
+    g.fillStyle = metal(45, 32, 74);
+    g.fill();
+    g.lineWidth = 1;
+    g.strokeStyle = 'rgba(8,12,22,0.45)';
+    g.stroke();
+    // team-color accent
     if (t.accent) {
-      tracePoly(t.accent, r);
-      ctx.fillStyle = 'hsla(' + hue + ',95%,62%,0.5)';
-      ctx.fill();
+      tracePolyOn(g, t.accent, r);
+      g.fillStyle = metal(92, 46, 70);
+      g.fill();
+      g.strokeStyle = 'rgba(8,12,22,0.45)';
+      g.stroke();
     }
-    // panel lines
+    // panel seams
     if (t.deco) {
-      ctx.strokeStyle = 'hsla(' + hue + ',45%,85%,0.4)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
+      g.strokeStyle = 'rgba(8,12,24,0.65)';
+      g.lineWidth = Math.max(1, r * 0.06);
+      g.beginPath();
       for (const line of t.deco) {
-        ctx.moveTo(line[0][0] * r, line[0][1] * r);
-        for (let i = 1; i < line.length; i++) ctx.lineTo(line[i][0] * r, line[i][1] * r);
+        g.moveTo(line[0][0] * r, line[0][1] * r);
+        for (let i = 1; i < line.length; i++) g.lineTo(line[i][0] * r, line[i][1] * r);
       }
-      ctx.stroke();
+      g.stroke();
     }
-    // cockpit bubble
+    // engine nozzles
+    for (const en of t.engines) {
+      g.beginPath();
+      g.arc(en[0] * r, en[1] * r, r * 0.16, 0, TAU);
+      g.fillStyle = 'hsl(' + hue + ',20%,10%)';
+      g.fill();
+      g.strokeStyle = 'rgba(8,12,22,0.7)';
+      g.lineWidth = 1;
+      g.stroke();
+    }
+    // cockpit glass with specular glint toward the light
     if (t.cockpit) {
       const [cx, cy, crx, cry] = t.cockpit;
-      const cg = ctx.createRadialGradient(cx * r + crx * r * 0.3, cy * r - cry * r * 0.3, 0.5, cx * r, cy * r, crx * r * 1.4);
-      cg.addColorStop(0, 'rgba(240,250,255,0.95)');
-      cg.addColorStop(0.5, 'rgba(140,200,255,0.75)');
-      cg.addColorStop(1, 'rgba(40,80,160,0.25)');
-      ctx.fillStyle = cg;
-      ctx.beginPath();
-      ctx.ellipse(cx * r, cy * r, crx * r, cry * r, 0, 0, TAU);
-      ctx.fill();
+      const gx = cx * r + lx * crx * r * 0.45, gy = cy * r + ly * cry * r * 0.45;
+      const cg = g.createRadialGradient(gx, gy, 0.5, cx * r, cy * r, crx * r * 1.5);
+      cg.addColorStop(0, 'rgba(235,248,255,0.95)');
+      cg.addColorStop(0.45, 'rgba(120,185,240,0.85)');
+      cg.addColorStop(1, 'rgba(20,45,95,0.9)');
+      g.fillStyle = cg;
+      g.beginPath();
+      g.ellipse(cx * r, cy * r, crx * r, cry * r, 0, 0, TAU);
+      g.fill();
+      g.strokeStyle = 'rgba(8,12,22,0.7)';
+      g.lineWidth = 1;
+      g.stroke();
     }
+  }
+
+  // 36-frame rotation atlas per (type,hue), world light fixed at top-left
+  const atlasCache = new Map();
+  const LIGHT_WORLD = -3 * Math.PI / 4; // from top-left of the screen
+  function shipAtlas(typeKey, hue) {
+    const key = typeKey + ':' + Math.round(hue);
+    let a = atlasCache.get(key);
+    if (a) return a;
+    const t = SHIP_TYPES[typeKey];
+    const r = t.radius * 1.35;
+    const cell = Math.ceil(r * 2 * 1.35) + 10;
+    const doc = GLOBAL.document;
+    const c = doc.createElement('canvas');
+    c.width = cell * ROT_FRAMES; c.height = cell;
+    const g = c.getContext('2d');
+    for (let f = 0; f < ROT_FRAMES; f++) {
+      const ang = f / ROT_FRAMES * TAU;
+      g.save();
+      g.translate(f * cell + cell / 2, cell / 2);
+      g.rotate(ang);
+      drawShipGeometry(g, t, hue, r, LIGHT_WORLD - ang);
+      g.restore();
+    }
+    a = { c, cell };
+    atlasCache.set(key, a);
+    return a;
   }
 
   function drawShip(s) {
     if (s.dead) return;
     const isMe = s === G.player;
     const stealthy = s.t.stealth && !isMe;
-    const alpha = stealthy ? 0.4 : 1;
+    const alpha = stealthy ? 0.35 : 1;
     const r = s.t.radius * 1.35;
 
-    // motion trail
+    // motion trail (subtle)
     if (s.trail && !stealthy) {
       ctx.globalCompositeOperation = 'lighter';
       for (const tp of s.trail) {
         if (tp.a <= 0) continue;
-        drawGlow(tp.x, tp.y, 16, s.hue, tp.a * 0.16);
+        drawGlow(tp.x, tp.y, 13, s.hue, tp.a * 0.1);
       }
       ctx.globalCompositeOperation = 'source-over';
     }
 
+    // rotation quantized to 36 frames, like the original's sprites
+    const frame = ((Math.round(s.angle / TAU * ROT_FRAMES) % ROT_FRAMES) + ROT_FRAMES) % ROT_FRAMES;
+    const qa = frame / ROT_FRAMES * TAU;
+
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(s.x, s.y);
-    ctx.globalCompositeOperation = 'lighter';
-    drawGlow(0, 0, 60, s.hue, stealthy ? 0.12 : 0.3);
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.rotate(s.angle);
 
-    // engine flames under the hull
+    // engine flames under the hull, aligned to the quantized frame
     const th = s.remote ? s.netTh : (s.ctl.thrust > 0 || s.rocketT > 0 ? 1 : 0);
     if (th) {
+      ctx.save();
+      ctx.rotate(qa);
       const rk = s.rocketT > 0;
       const fl = (rk ? 1.9 : 1) * (0.75 + Math.random() * 0.5);
       ctx.globalCompositeOperation = 'lighter';
       for (const en of s.t.engines) {
         const ex = en[0] * r, eyy = en[1] * r;
-        // outer flame
         ctx.beginPath();
         ctx.moveTo(ex, eyy + r * 0.18);
         ctx.lineTo(ex - r * fl, eyy);
@@ -704,7 +843,6 @@
         ctx.closePath();
         ctx.fillStyle = 'hsla(' + (rk ? 14 : 28) + ',100%,58%,0.85)';
         ctx.fill();
-        // white-hot core
         ctx.beginPath();
         ctx.moveTo(ex, eyy + r * 0.09);
         ctx.lineTo(ex - r * fl * 0.55, eyy);
@@ -712,19 +850,24 @@
         ctx.closePath();
         ctx.fillStyle = 'rgba(255,250,235,0.9)';
         ctx.fill();
-        drawGlow(ex - r * 0.3, eyy, 26 * fl, rk ? 14 : 32, 0.7);
+        drawGlow(ex - r * 0.3, eyy, 24 * fl, rk ? 14 : 32, 0.6);
       }
       ctx.globalCompositeOperation = 'source-over';
+      ctx.restore();
     }
 
-    drawShipBody(s.t, s.hue, r, { flash: s.flash > 0 });
-
-    // idle engine glow
-    ctx.globalCompositeOperation = 'lighter';
-    for (const en of s.t.engines) {
-      drawGlow(en[0] * r, en[1] * r, 10 + 3 * Math.sin(G.time * 9 + s.id), s.hue, 0.6);
+    const atlas = shipAtlas(s.type, s.hue);
+    ctx.drawImage(atlas.c, frame * atlas.cell, 0, atlas.cell, atlas.cell,
+      -atlas.cell / 2, -atlas.cell / 2, atlas.cell, atlas.cell);
+    if (s.flash > 0) {
+      // brighten the sprite on hit
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = alpha * 0.85;
+      ctx.drawImage(atlas.c, frame * atlas.cell, 0, atlas.cell, atlas.cell,
+        -atlas.cell / 2, -atlas.cell / 2, atlas.cell, atlas.cell);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = alpha;
     }
-    ctx.globalCompositeOperation = 'source-over';
     ctx.restore();
 
     if (s.safe > 0) {
@@ -759,7 +902,9 @@
   }
 
   // ---------------------------------------------------------------- world render
-  const BULLET_HUES = { 1: 46, 2: 18, 3: 205 };
+  // original SubSpace level colors: L1 red-orange, L2 yellow, L3 blue
+  const BULLET_HUES = { 1: 18, 2: 52, 3: 205 };
+  const BOMB_HUES = { 1: 4, 2: 52, 3: 210 };
   function drawWorld() {
     const W = G.W;
     ctx.save();
@@ -800,12 +945,14 @@
       ctx.fillRect(b.x - 1.5, b.y - 1.5, 3, 3);
     }
     for (const b of W.bombs) {
+      // original bombs: pulsing fireballs colored by level
+      const hue = BOMB_HUES[b.level] || 4;
       const pulse = 1 + 0.3 * Math.sin(G.time * 18);
-      drawGlow(b.x, b.y, (28 + b.level * 8) * pulse, 300, 0.95);
+      drawGlow(b.x, b.y, (28 + b.level * 8) * pulse, hue, 0.95);
       ctx.save();
       ctx.translate(b.x, b.y);
       ctx.rotate(G.time * 10);
-      ctx.strokeStyle = 'hsla(310,100%,75%,0.8)';
+      ctx.strokeStyle = 'hsla(' + hue + ',100%,72%,0.8)';
       ctx.lineWidth = 1.5;
       const br = 5 + b.level * 1.5;
       ctx.beginPath();
@@ -815,7 +962,10 @@
         ctx.lineTo(Math.cos(a) * br, Math.sin(a) * br);
       }
       ctx.stroke();
-      ctx.fillStyle = 'hsla(310,100%,85%,1)';
+      const core = ctx.createRadialGradient(0, 0, 0.5, 0, 0, 3.5 + b.level);
+      core.addColorStop(0, '#fff8e8');
+      core.addColorStop(1, 'hsla(' + hue + ',100%,60%,0.95)');
+      ctx.fillStyle = core;
       ctx.beginPath();
       ctx.arc(0, 0, 3 + b.level, 0, TAU);
       ctx.fill();
@@ -869,7 +1019,7 @@
     bloomCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, bw, bh);
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = 0.4;
+    ctx.globalAlpha = 0.22;
     if (filterOK) ctx.filter = 'blur(5px)';
     ctx.drawImage(bloomC, 0, 0, bw, bh, 0, 0, vw, vh);
     ctx.restore();
@@ -944,7 +1094,7 @@
       'BOMB L' + p.bombLevel,
       'E ×' + p.repels,
       'Q ×' + p.bursts,
-      'R ×' + p.rockets,
+      p.t.blink ? (p.blinkCd > 0 ? 'R BLINK ' + p.blinkCd.toFixed(1) : 'R BLINK ✓') : 'R ×' + p.rockets,
     ];
     const iw = 86, totW = items.length * iw + (items.length - 1) * 6;
     let ix = vw / 2 - totW / 2;
@@ -1072,7 +1222,7 @@
     ctx.fillStyle = 'rgba(4,6,13,0.78)';
     ctx.fillRect(0, 0, vw, vh);
     txt('CHOOSE YOUR SHIP', vw / 2, 72, 30, '#c8ecff', 'center', 800);
-    txt('◄ ► or 1–8 select   ·   ENTER launch   ·   ESC back' + (G.online ? '   ·   ONLINE' : ''), vw / 2, 100, 13, G.online ? '#8fd4a8' : '#789', 'center');
+    txt('◄ ► select   ·   ENTER launch   ·   ESC back' + (G.online ? '   ·   ONLINE' : ''), vw / 2, 100, 13, G.online ? '#8fd4a8' : '#789', 'center');
 
     const n = SHIP_ORDER.length;
     const cy = vh / 2 - 40;
@@ -1089,21 +1239,25 @@
       ctx.globalAlpha = focus ? 1 : 0.35;
       if (focus) {
         ctx.globalCompositeOperation = 'lighter';
-        drawGlow(0, 0, 190, t.hue, 0.35);
+        drawGlow(0, 0, 190, t.hue, 0.25);
         ctx.globalCompositeOperation = 'source-over';
       }
-      ctx.rotate(focus ? G.time * 0.9 : -0.5);
-      drawShipBody(t, t.hue, t.radius * scale, {});
+      const ang = focus ? G.time * 0.9 : -0.5;
+      ctx.rotate(ang);
+      drawShipGeometry(ctx, t, t.hue, t.radius * scale, LIGHT_WORLD - ang);
       ctx.restore();
     }
 
     const t = SHIP_TYPES[SHIP_ORDER[G.sel]];
-    txt(t.label.toUpperCase(), vw / 2, cy + 108, 30, 'hsla(' + t.hue + ',90%,68%,1)', 'center', 800);
-    txt((G.sel + 1) + ' / ' + n, vw / 2, cy + 130, 12, '#678', 'center');
-    txt(t.desc, vw / 2, cy + 156, 14, '#abc', 'center', 500);
+    const isRedux = t.cls === 'redux';
+    txt(isRedux ? 'REDUX CLASS — NEW GENERATION' : 'CLASSIC HULL', vw / 2, cy + 88, 11,
+      isRedux ? '#fd8' : '#68a', 'center', 700);
+    txt(t.label.toUpperCase(), vw / 2, cy + 116, 30, 'hsla(' + t.hue + ',90%,68%,1)', 'center', 800);
+    txt((G.sel + 1) + ' / ' + n, vw / 2, cy + 136, 12, '#678', 'center');
+    txt(t.desc, vw / 2, cy + 160, 14, '#abc', 'center', 500);
 
     // stat panel
-    const sw = Math.min(560, vw - 60), sx = vw / 2 - sw / 2, sy = cy + 178;
+    const sw = Math.min(560, vw - 60), sx = vw / 2 - sw / 2, sy = cy + 180;
     panel(sx, sy, sw, 66);
     const col = (sw - 40) / 3;
     statBar(sx + 20, sy + 14, col - 20, 'ENERGY', t.maxEnergy / 2600, t.hue);
@@ -1115,6 +1269,10 @@
     const traits = [];
     if (t.stealth) traits.push('STEALTH: invisible to radar, dim to eyes');
     if (t.repelRegen) traits.push('REPEL RACK: restocks every ' + t.repelRegen + 's');
+    if (t.startMulti) traits.push('FACTORY MULTIFIRE + RICOCHET ROUNDS');
+    if (t.armor) traits.push('PLATING: takes ' + Math.round((1 - t.armor) * 100) + '% less damage');
+    if (t.leech) traits.push('LEECH: steals ' + Math.round(t.leech * 100) + '% of damage dealt as energy');
+    if (t.blink) traits.push('BLINK DRIVE: R teleports 240m forward, through walls');
     if (traits.length) txt(traits.join('  ·  '), vw / 2, sy + 56, 11, '#fd8', 'center', 600);
   }
 
@@ -1298,7 +1456,8 @@
       const n = SHIP_ORDER.length;
       if (code === 'ArrowLeft' || code === 'KeyA') G.sel = (G.sel + n - 1) % n;
       else if (code === 'ArrowRight' || code === 'KeyD') G.sel = (G.sel + 1) % n;
-      else if (/^Digit[1-8]$/.test(code)) G.sel = parseInt(code.slice(5), 10) - 1;
+      else if (/^Digit[1-9]$/.test(code)) G.sel = Math.min(n - 1, parseInt(code.slice(5), 10) - 1);
+      else if (code === 'Digit0') G.sel = Math.min(n - 1, 9);
       else if (code === 'Enter') {
         if (G.online) launchOnline(SHIP_ORDER[G.sel]);
         else startSolo(SHIP_ORDER[G.sel]);
@@ -1318,7 +1477,7 @@
       if (!p || p.dead) return;
       if (code === 'KeyE') SIM.doRepel(G.W, p);
       else if (code === 'KeyQ') SIM.doBurst(G.W, p);
-      else if (code === 'KeyR') SIM.fireRocket(G.W, p);
+      else if (code === 'KeyR') { if (p.t.blink) SIM.doBlink(G.W, p); else SIM.fireRocket(G.W, p); }
       else if (code === 'KeyX' && p.multi) {
         p.multiOn = !p.multiOn;
         say('MultiFire ' + (p.multiOn ? 'ON' : 'OFF'), '#8df');

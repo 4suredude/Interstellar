@@ -33,9 +33,44 @@ const SIM = require(path.join(ROOT, 'sim.js'));
 
   SIM.addBots(W, 10);
   assert(W.ships.length === 10, 'ten bots spawned');
-  assert(Object.keys(SIM.SHIP_TYPES).length === 8, 'all 8 SubSpace hulls exist');
-  for (const key of ['warbird', 'javelin', 'spider', 'leviathan', 'terrier', 'weasel', 'lancaster', 'shark'])
+  assert(Object.keys(SIM.SHIP_TYPES).length === 12, '8 classic + 4 REDUX hulls exist');
+  for (const key of ['warbird', 'javelin', 'spider', 'leviathan', 'terrier', 'weasel', 'lancaster', 'shark',
+    'vanguard', 'aegis', 'reaper', 'phantom'])
     assert(SIM.SHIP_TYPES[key], 'ship type ' + key + ' exists');
+
+  // REDUX mechanics
+  {
+    const Wm = SIM.createWorld({ seed: 7, spawnPrizes: false });
+    const van = SIM.makeShip(Wm, 'vanguard', 'local', 'Van', 45);
+    assert(van.multi && van.bounceBullets, 'vanguard ships factory multifire + ricochet');
+
+    const aeg = SIM.makeShip(Wm, 'aegis', 'local', 'Aeg', 215);
+    const wb = SIM.makeShip(Wm, 'warbird', 'local', 'Wb', 190);
+    aeg.x = wb.x = 500; aeg.y = wb.y = 500;
+    const e0 = aeg.energy;
+    SIM.damageShip(Wm, aeg, 1000, wb);
+    assert(Math.abs((e0 - aeg.energy) - 720) < 1, 'aegis armor reduces damage to 72% (took ' + (e0 - aeg.energy) + ')');
+
+    const rea = SIM.makeShip(Wm, 'reaper', 'local', 'Rea', 275);
+    rea.energy = 500;
+    SIM.damageShip(Wm, wb, 1000, rea);
+    assert(Math.abs(rea.energy - 800) < 1, 'reaper leeches 30% of damage dealt (has ' + rea.energy + ')');
+
+    const pha = SIM.makeShip(Wm, 'phantom', 'local', 'Pha', 320);
+    const sp = SIM.randClearPoint(Wm);
+    pha.x = sp.x; pha.y = sp.y; pha.angle = 0; pha.energy = 1200;
+    // find a heading with a clear landing zone
+    let blinked = false;
+    for (let a = 0; a < 12 && !blinked; a++) {
+      pha.angle = a / 12 * Math.PI * 2;
+      pha.blinkCd = 0;
+      blinked = SIM.doBlink(Wm, pha);
+    }
+    assert(blinked, 'phantom blink teleports');
+    const evs = SIM.drainEvents(Wm);
+    assert(evs.some(e => e.e === 'blink'), 'blink event emitted');
+    assert(evs.some(e => e.e === 'hit' && typeof e.att === 'number'), 'hit events carry attacker id');
+  }
 
   const me = SIM.makeShip(W, 'warbird', 'local', 'Tester', 190);
   SIM.spawnShip(W, me);
