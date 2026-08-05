@@ -98,6 +98,133 @@
     tone('sine', 1400, 250, 0.18, v * 0.7, 0.1);
   };
 
+  // ---------------------------------------------------------------- music
+  // Generative space electronica, synthesized live — no audio files.
+  // A 16-bar loop: slow minor pads, a sub bass, a delayed arpeggio,
+  // soft four-on-the-floor kick and offbeat hats, and rare high sparkles.
+  const MUS = { on: true, step: 0, nextT: 0 };
+  const MUS_BPM = 96, MUS_STEP = 60 / MUS_BPM / 4; // 16th notes
+  // i — VI — III — VII in A minor, voiced low and wide
+  const MUS_CHORDS = [
+    [57, 60, 64, 69],   // Am
+    [53, 57, 60, 65],   // F
+    [48, 55, 60, 64],   // C
+    [55, 59, 62, 67],   // G
+  ];
+  const MUS_ARP_PAT = [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1];
+  const midiF = m => 440 * Math.pow(2, (m - 69) / 12);
+
+  function musicInit() {
+    if (!SFX.ctx || SFX.musBus) return;
+    const a = SFX.ctx;
+    SFX.musBus = a.createGain();
+    SFX.musBus.gain.value = 0.3;
+    SFX.musBus.connect(SFX.master);
+    // dotted-8th feedback delay for the arp — the classic space echo
+    const d = a.createDelay(1);
+    d.delayTime.value = MUS_STEP * 3;
+    const fb = a.createGain(); fb.gain.value = 0.35;
+    const wet = a.createGain(); wet.gain.value = 0.45;
+    d.connect(fb); fb.connect(d);
+    d.connect(wet); wet.connect(SFX.musBus);
+    SFX.musDelay = d;
+  }
+  function musNote(t, freq, dur, vol, type, lp, echo) {
+    const a = SFX.ctx;
+    const o = a.createOscillator();
+    o.type = type; o.frequency.value = freq;
+    const g = a.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    let head = o;
+    if (lp) {
+      const f = a.createBiquadFilter();
+      f.type = 'lowpass'; f.frequency.value = lp;
+      o.connect(f); head = f;
+    }
+    head.connect(g);
+    g.connect(SFX.musBus);
+    if (echo && SFX.musDelay) g.connect(SFX.musDelay);
+    o.start(t); o.stop(t + dur + 0.05);
+  }
+  function musPad(t, chord, dur) {
+    const a = SFX.ctx;
+    // deep root drone
+    musNote(t, midiF(chord[0] - 24), dur, 0.09, 'sine', 0, false);
+    // two detuned saws per chord tone, slow bloom
+    for (const m of chord.slice(0, 3)) {
+      for (const det of [0.9965, 1.0035]) {
+        const o = a.createOscillator();
+        o.type = 'sawtooth'; o.frequency.value = midiF(m) * det;
+        const f = a.createBiquadFilter();
+        f.type = 'lowpass';
+        f.frequency.setValueAtTime(320, t);
+        f.frequency.linearRampToValueAtTime(750, t + dur * 0.5);
+        f.frequency.linearRampToValueAtTime(320, t + dur);
+        const g = a.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.linearRampToValueAtTime(0.035, t + 1.6);
+        g.gain.setValueAtTime(0.035, t + dur - 1.8);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        o.connect(f); f.connect(g); g.connect(SFX.musBus);
+        o.start(t); o.stop(t + dur + 0.1);
+      }
+    }
+  }
+  function musKick(t) {
+    const a = SFX.ctx;
+    const o = a.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(115, t);
+    o.frequency.exponentialRampToValueAtTime(38, t + 0.11);
+    const g = a.createGain();
+    g.gain.setValueAtTime(0.42, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+    o.connect(g); g.connect(SFX.musBus);
+    o.start(t); o.stop(t + 0.2);
+  }
+  function musHat(t, vol) {
+    const a = SFX.ctx;
+    const src = a.createBufferSource();
+    src.buffer = SFX.noise;
+    src.loop = true;
+    const f = a.createBiquadFilter();
+    f.type = 'highpass'; f.frequency.value = 7000;
+    const g = a.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+    src.connect(f); f.connect(g); g.connect(SFX.musBus);
+    src.start(t); src.stop(t + 0.08);
+  }
+  function musScheduleStep(step, t) {
+    const chord = MUS_CHORDS[(step >> 6) & 3];   // chord change every 4 bars
+    const s16 = step & 15;
+    if ((step & 63) === 0) musPad(t, chord, 64 * MUS_STEP + 0.5);
+    if (s16 === 0 || s16 === 10) musNote(t, midiF(chord[0] - 12), 0.5, 0.4, 'triangle', 320, false);
+    if ((step & 3) === 0) musKick(t);
+    if ((step & 3) === 2) musHat(t, 0.045);
+    if (MUS_ARP_PAT[s16]) {
+      const tone = chord[((step * 7) >> 2) % chord.length] + 12 * (1 + ((step >> 3) & 1));
+      musNote(t, midiF(tone), 0.26, 0.13 + Math.random() * 0.04, 'square', 1900, true);
+    }
+    if (Math.random() < 0.018) {
+      musNote(t, midiF(84 + [0, 3, 7, 10][irand(4)]), 1.8, 0.05, 'sine', 0, true);
+    }
+  }
+  function musicTick() {
+    if (!SFX.ctx || !MUS.on || G.muted || SFX.ctx.state !== 'running') return;
+    musicInit();
+    const now = SFX.ctx.currentTime;
+    if (MUS.nextT < now - 0.5) MUS.nextT = now + 0.06;  // resync after tab sleep
+    const ahead = now + 0.35;
+    while (MUS.nextT < ahead) {
+      musScheduleStep(MUS.step, MUS.nextT);
+      MUS.step = (MUS.step + 1) & 511;
+      MUS.nextT += MUS_STEP;
+    }
+  }
+
   // ---------------------------------------------------------------- messages
   function say(text, color) {
     G.msgs.push({ text, color: color || '#8f8', t: 0 });
@@ -1205,7 +1332,7 @@
     if (blink) txt('ENTER — fly solo vs bots', vw / 2, vh / 2 + 66, 20, '#cff', 'center', 700);
     txt('O — online multiplayer', vw / 2, vh / 2 + 98, 17, '#8fd4a8', 'center', 700);
     txt('best score  ' + G.best, vw / 2, vh / 2 + 128, 13, '#678', 'center');
-    txt('M mute  ·  F fullscreen', vw / 2, vh - 24, 12, '#567', 'center');
+    txt('M mute  ·  N music  ·  F fullscreen', vw / 2, vh - 24, 12, '#567', 'center');
   }
 
   function statBar(x, y, w, label, frac, hue) {
@@ -1311,7 +1438,7 @@
       'SHIFT / B      bomb',
       'E repel   Q burst   R rocket   X multifire',
       'ENTER          chat (online)',
-      'M mute         F fullscreen',
+      'M mute         N music        F fullscreen',
       '',
       'P resume    ·    BACKSPACE abandon to title',
     ];
@@ -1398,7 +1525,7 @@
 
   const HANDLED = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space',
     'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'Enter', 'Backspace', 'Escape',
-    'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyB', 'KeyE', 'KeyQ', 'KeyR', 'KeyX', 'KeyM', 'KeyP', 'KeyF', 'KeyO']);
+    'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyB', 'KeyE', 'KeyQ', 'KeyR', 'KeyX', 'KeyM', 'KeyN', 'KeyP', 'KeyF', 'KeyO']);
 
   function onKeyDown(e) {
     audioInit();
@@ -1434,6 +1561,12 @@
     keys[code] = true;
 
     if (code === 'KeyM') { G.muted = !G.muted; say(G.muted ? 'Sound muted' : 'Sound on', '#8df'); return; }
+    if (code === 'KeyN') {
+      MUS.on = !MUS.on;
+      try { GLOBAL.localStorage.setItem('interstellar-music', MUS.on ? '1' : '0'); } catch (err) { }
+      say(MUS.on ? 'Music on' : 'Music off', '#8df');
+      return;
+    }
     if (code === 'KeyF') {
       try { if (canvas.requestFullscreen) canvas.requestFullscreen(); } catch (err) { }
       return;
@@ -1536,6 +1669,9 @@
     });
     // keepalive so the server doesn't drop us when the tab is throttled
     setInterval(() => { if (G.online) netSend({ t: 'ka' }); }, 5000);
+    // music sequencer lookahead (starts producing sound once audio unlocks)
+    try { MUS.on = GLOBAL.localStorage.getItem('interstellar-music') !== '0'; } catch (e) { }
+    setInterval(musicTick, 100);
     GLOBAL.requestAnimationFrame(frame);
   }
 

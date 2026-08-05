@@ -85,7 +85,13 @@ A new generation of hulls joins the fleet — each with a mechanic all its own:
   flames with white-hot cores, motion trails, debris and shockwave
   explosions, muzzle flashes, hex spawn shields, blink warp effects, and
   screen shake.
-- Synthesized WebAudio SFX (no asset files) with distance attenuation.
+- **All audio is synthesized live — zero asset files.** Sound effects (guns,
+  bombs, explosions, repels, blinks, bounces, low-energy warnings) are
+  WebAudio-generated with distance attenuation, and the soundtrack is
+  **generative space electronica**: slow detuned minor pads, a sub-bass
+  pulse, a dotted-eighth delayed arpeggio, soft four-on-the-floor kick and
+  offbeat hats, and rare high sparkles, sequenced live at 96 BPM. Toggle it
+  with `N` (remembered between sessions), mute everything with `M`.
 - AI pilots with target leading, wall avoidance, dodging, fleeing, repel/burst
   usage, and prize hunting — the zone fights on with or without you (watch the
   attract mode behind the title screen).
@@ -107,7 +113,7 @@ A new generation of hulls joins the fleet — each with a mechanic all its own:
 | `X` | Toggle MultiFire |
 | `Enter` | Chat (online) |
 | `P` / `Esc` | Pause / menu |
-| `M` | Mute · `F` Fullscreen |
+| `M` | Mute all · `N` Music on/off · `F` Fullscreen |
 
 ## Architecture
 
