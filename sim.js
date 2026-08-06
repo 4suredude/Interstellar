@@ -247,9 +247,26 @@
     fillRect(0, 0, MAPS, 2, 1); fillRect(0, MAPS - 2, MAPS, 2, 1);
     fillRect(0, 0, 2, MAPS, 1); fillRect(MAPS - 2, 0, 2, MAPS, 1);
 
+    // open battlegrounds: big fields where dogfights happen in clean space.
+    // Structures can't spawn in them, and stragglers get carved out after.
+    const MC = MAPS / 2;
+    const clearings = [
+      { x: MC, y: MC, r: 30 },            // arena + its approaches
+      { x: MC - 60, y: MC, r: 26 },       // west staging field (blue flank)
+      { x: MC + 60, y: MC, r: 26 },       // east staging field (red flank)
+      { x: MC, y: MC - 62, r: 20 },       // north field
+      { x: MC, y: MC + 62, r: 20 },       // south field
+    ];
+    for (let i = 0; i < 2; i++) {
+      clearings.push({ x: 28 + rn(MAPS - 56), y: 28 + rn(MAPS - 56), r: 15 + rn(9) });
+    }
+    const inClearing = (x, y, margin) =>
+      clearings.some(cl => hyp(x - cl.x, y - cl.y) < cl.r + (margin || 0));
+
     const structures = style === 'gauntlet' ? 40 : style === 'rings' ? 25 : 60;
     for (let i = 0; i < structures; i++) {
       const cx = 8 + rn(MAPS - 16), cy = 8 + rn(MAPS - 16);
+      if (inClearing(cx, cy, 6)) continue;   // keep the battlegrounds open
       switch (rn(5)) {
         case 0: fillRect(cx, cy, 2 + rn(5), 2 + rn(5), 1); break;
         case 1: {
@@ -289,9 +306,11 @@
         }
       }
     };
-    for (let ty = 0; ty < MAPS; ty++)
-      for (let tx = 0; tx < MAPS; tx++)
-        if (hyp(tx - C, ty - C) < AR - 1) set(tx, ty, 0);
+    // carve the battlegrounds clean (structures that leaned in get trimmed),
+    // then the arena interior
+    for (let ty = 2; ty < MAPS - 2; ty++)
+      for (let tx = 2; tx < MAPS - 2; tx++)
+        if (inClearing(tx, ty, 0) || hyp(tx - C, ty - C) < AR - 1) set(tx, ty, 0);
     drawRing(AR, [0, 0.25, 0.5, 0.75], 0.11);
     if (style === 'rings') {
       // concentric battle rings around the core
@@ -310,6 +329,7 @@
           if (k === gapAt) { k += 3; gapAt = k + 8 + rn(8); continue; }
           const x = horiz ? px + k : px, y = horiz ? py : py + k;
           if (hyp(x - C, y - C) < AR + 4) continue;   // keep the arena clean
+          if (inClearing(x, y, 0)) continue;          // and the open fields
           set(x, y, 1);
           set(horiz ? x : x + 1, horiz ? y + 1 : y, 1);
         }
