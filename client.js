@@ -766,11 +766,11 @@
       h = (h ^ (h >> 13)) * 1274126177 | 0;
       return ((h ^ (h >> 16)) >>> 0) / 4294967296;
     };
-    // faint outer glow bleed so walls read against the void (subtle)
+    // outer glow bleed: the collidable layer announces itself against space
     c.save();
-    c.shadowColor = 'rgba(70,120,220,0.35)';
-    c.shadowBlur = 8;
-    c.fillStyle = '#151c30';
+    c.shadowColor = 'rgba(90,145,255,0.55)';
+    c.shadowBlur = 11;
+    c.fillStyle = '#161e34';
     for (let ty = 0; ty < MAPS; ty++)
       for (let tx = 0; tx < MAPS; tx++)
         if (SIM.tileSolid(W, tx, ty)) c.fillRect(tx * TILE, ty * TILE, TILE, TILE);
@@ -803,7 +803,7 @@
           c.fillRect(sx, sy, 1.6, 1.6);
         }
         // thin energized rim only where the wall faces open space
-        c.strokeStyle = 'rgba(120,170,255,0.35)';
+        c.strokeStyle = 'rgba(140,185,255,0.6)';
         c.lineWidth = 1;
         c.beginPath();
         if (openU) { c.moveTo(x, y + 0.5); c.lineTo(x + TILE, y + 0.5); }
@@ -1167,6 +1167,21 @@
     return c;
   }
 
+  // atmospheric perspective: distance = smaller, dimmer, softer, cooler
+  function hazify(c, blurPx, tintA) {
+    const doc = GLOBAL.document;
+    const o = doc.createElement('canvas');
+    o.width = c.width; o.height = c.height;
+    const g = o.getContext('2d');
+    try { g.filter = 'blur(' + blurPx + 'px)'; } catch (e) { }
+    g.drawImage(c, 0, 0);
+    g.filter = 'none';
+    g.globalCompositeOperation = 'source-atop';
+    g.fillStyle = 'rgba(12,18,40,' + tintA + ')';
+    g.fillRect(0, 0, o.width, o.height);
+    return o;
+  }
+
   function initBackdrop() {
     const doc = GLOBAL.document;
     stars.length = 0;
@@ -1204,11 +1219,11 @@
     bgObjs.length = 0;
     const rng = SIM.mulberry32((Math.random() * 1e9) | 0);
     const planetHues = [rand(10, 40), rand(170, 220), rand(270, 330)];
-    bgObjs.push({ c: makePlanet(150, planetHues[0], 'ringed', rng), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.16, a: 0.8, add: false });
-    bgObjs.push({ c: makePlanet(110, planetHues[1], 'gas', rng), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.12, a: 0.75, add: false });
-    bgObjs.push({ c: makePlanet(60, planetHues[2], 'rock', rng), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.09, a: 0.72, add: false });
-    bgObjs.push({ c: makeBlackHole(170), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.13, a: 0.95, add: true, rotV: 0.02 });
-    bgObjs.push({ c: makeGalaxy(190, rng), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.06, a: 0.85, add: true });
+    bgObjs.push({ c: hazify(makePlanet(88, planetHues[0], 'ringed', rng), 1.6, 0.4), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.07, a: 0.55, add: false });
+    bgObjs.push({ c: hazify(makePlanet(66, planetHues[1], 'gas', rng), 1.6, 0.42), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.055, a: 0.5, add: false });
+    bgObjs.push({ c: hazify(makePlanet(42, planetHues[2], 'rock', rng), 1.4, 0.45), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.045, a: 0.45, add: false });
+    bgObjs.push({ c: hazify(makeBlackHole(120), 1, 0.22), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.06, a: 0.65, add: true, rotV: 0.02 });
+    bgObjs.push({ c: makeGalaxy(190, rng), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.05, a: 0.7, add: true });
     const flareTints = ['200,220,255', '255,230,200', '255,210,225'];
     for (let i = 0; i < 8; i++) {
       bgObjs.push({
@@ -2201,6 +2216,9 @@
   function render() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     drawBackdrop();
+    // depth haze: everything behind this line is scenery, not gameplay
+    ctx.fillStyle = 'rgba(3,5,12,0.22)';
+    ctx.fillRect(0, 0, vw, vh);
     if (G.W && G.mapBig) drawWorld();
     applyBloom();
     if (vignette) ctx.drawImage(vignette, 0, 0, vw, vh);
