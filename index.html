@@ -7,10 +7,38 @@
 <style>
   html,body{margin:0;padding:0;height:100%;background:#04060d;overflow:hidden}
   canvas{display:block;width:100vw;height:100vh;cursor:crosshair}
+  #err{position:fixed;top:12px;left:12px;right:12px;z-index:9;display:none;
+    color:#ffb0a8;background:#1c0a0a;border:1px solid #a04438;border-radius:8px;
+    padding:14px 18px;font:13px/1.5 monospace;white-space:pre-wrap}
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
+<div id="err"></div>
+<script>
+// never fail silently: any startup problem is reported on screen
+(function () {
+  function show(msg) {
+    var d = document.getElementById('err');
+    d.style.display = 'block';
+    d.textContent += (d.textContent ? '\n\n' : 'INTERSTELLAR could not start\n\n') + msg;
+  }
+  window.__showErr = show;
+  window.onerror = function (msg, src, line) {
+    show(msg + '\n  at ' + (src || '?') + ':' + (line || '?') +
+      '\n\nIf this mentions unexpected syntax, your browser may be too old — use a current Chrome, Edge, or Firefox.');
+  };
+  window.addEventListener('load', function () {
+    if (!window.SIM || !window.__interstellar) {
+      show('The game scripts did not load.\n' +
+        '- index.html, sim.js, and client.js must all be in the SAME folder\n' +
+        '  (clone or download the whole repository, not just this file).\n' +
+        '- Easiest path: install Node.js, run  node server.js  in the game\n' +
+        '  folder, then open  http://localhost:8666  in your browser.');
+    }
+  });
+})();
+</script>
 <script src="sim.js"></script>
 <script src="client.js"></script>
 </body>
