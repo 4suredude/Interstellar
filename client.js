@@ -1068,6 +1068,21 @@
     return 'rgb(' + c + ',' + c + ',' + c + ')';
   };
 
+  // symmetric greeble layout derived from the hull — the "bits"
+  function greebles(t) {
+    let top = t.shape[0], bot = t.shape[0], nose = t.shape[0];
+    for (const p of t.shape) {
+      if (p[1] > top[1]) top = p;
+      if (p[1] < bot[1]) bot = p;
+      if (p[0] > nose[0]) nose = p;
+    }
+    return {
+      top, bot, nose,
+      spine: [[0.5, 0.05], [0.15, 0.07], [-0.55, 0.06], [-0.68, 0], [-0.55, -0.06], [0.15, -0.07], [0.5, -0.05]],
+      hard: [[top[0] * 0.62, top[1] * 0.62], [bot[0] * 0.62, bot[1] * 0.62]],
+    };
+  }
+
   function paintHeight(g, t, r, ang, cs) {
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.clearRect(0, 0, cs, cs);
@@ -1075,6 +1090,7 @@
     g.translate(cs / 2, cs / 2);
     g.rotate(ang);
     const cx = t.cockpit ? t.cockpit[0] * r * 0.5 : 0;
+    const gb = greebles(t);
     g.globalCompositeOperation = 'lighten';
     // fuselage volume: tallest near the cockpit, sloping to thin wing edges
     tracePolyOn(g, t.shape, r);
@@ -1096,10 +1112,36 @@
       g.fill();
     }
     g.globalCompositeOperation = 'source-over';
+    // greebles ride on top, clipped so the silhouette never changes
+    g.save();
+    tracePolyOn(g, t.shape, r);
+    g.clip();
+    g.globalCompositeOperation = 'lighten';
+    // spine ridge
+    tracePolyOn(g, gb.spine, r);
+    g.fillStyle = gray(0.86);
+    g.fill();
+    // wing hardpoints
+    for (const hp of gb.hard) {
+      g.fillStyle = gray(0.78);
+      g.fillRect(hp[0] * r - r * 0.09, hp[1] * r - r * 0.06, r * 0.18, r * 0.12);
+    }
+    // twin nose barrels
+    g.fillStyle = gray(0.7);
+    g.fillRect(r * 0.5, -r * 0.12, r * 0.6, r * 0.045);
+    g.fillRect(r * 0.5, r * 0.075, r * 0.6, r * 0.045);
+    g.globalCompositeOperation = 'source-over';
+    // engine vents: grooves beside each nozzle
+    g.fillStyle = gray(0.3);
+    for (const en of t.engines) {
+      g.fillRect(en[0] * r + r * 0.1, en[1] * r - r * 0.14, r * 0.22, r * 0.035);
+      g.fillRect(en[0] * r + r * 0.1, en[1] * r + r * 0.1, r * 0.22, r * 0.035);
+    }
+    g.restore();
     // seam grooves carve into the hull so they catch the light
     if (t.deco) {
       g.strokeStyle = gray(0.32);
-      g.lineWidth = Math.max(1.5, r * 0.05);
+      g.lineWidth = Math.max(1.5, r * 0.045);
       g.beginPath();
       for (const line of t.deco) {
         g.moveTo(line[0][0] * r, line[0][1] * r);
@@ -1116,6 +1158,11 @@
       g.fillStyle = cg;
       g.beginPath();
       g.ellipse(px * r, py * r, rx * r, ry * r, 0, 0, TAU);
+      g.fill();
+      // antenna nub behind the canopy
+      g.beginPath();
+      g.arc((px - rx * 1.9) * r, py * r, r * 0.035, 0, TAU);
+      g.fillStyle = gray(0.95);
       g.fill();
     }
     // recessed engine nozzles
@@ -1134,35 +1181,53 @@
     g.save();
     g.translate(cs / 2, cs / 2);
     g.rotate(ang);
-    // hull: desaturated metal with a whisper of the team hue
+    // hull: bold hue identity like the old zone sprites, cleanly saturated
+    const gb = greebles(t);
     tracePolyOn(g, t.shape, r);
-    g.fillStyle = 'hsl(' + hue + ',16%,60%)';
+    g.fillStyle = 'hsl(' + hue + ',38%,55%)';
     g.fill();
-    // deterministic panel plating — same panels every frame and hue
+    // structured symmetric panel plating — designed, not noisy
     g.save();
     tracePolyOn(g, t.shape, r);
     g.clip();
     const rng = SIM.mulberry32(strHash(t.label));
-    for (let i = 0; i < 7; i++) {
-      const px = (rng() * 2 - 1) * r, py = (rng() * 2 - 1) * r;
-      const pw = (0.3 + rng() * 0.7) * r, ph = (0.2 + rng() * 0.5) * r;
-      g.fillStyle = 'hsla(' + hue + ',14%,' + (54 + rng() * 12) + '%,0.85)';
-      g.fillRect(px, py, pw, ph);
+    for (let i = 0; i < 4; i++) {
+      const px = (rng() * 1.6 - 0.9) * r;
+      const py = (0.12 + rng() * 0.75) * r;
+      const pw = (0.3 + rng() * 0.55) * r, ph = (0.18 + rng() * 0.4) * r;
+      const lit = 50 + rng() * 12;
+      g.fillStyle = 'hsla(' + hue + ',34%,' + lit + '%,0.9)';
+      g.fillRect(px, py, pw, ph);              // starboard panel
+      g.fillRect(px, -py - ph, pw, ph);        // mirrored port panel
+    }
+    // greeble albedo: spine, hardpoints, barrels, vents
+    tracePolyOn(g, gb.spine, r);
+    g.fillStyle = 'hsla(' + hue + ',26%,68%,0.95)';
+    g.fill();
+    g.fillStyle = 'hsla(' + hue + ',20%,42%,0.95)';
+    for (const hp of gb.hard) g.fillRect(hp[0] * r - r * 0.09, hp[1] * r - r * 0.06, r * 0.18, r * 0.12);
+    g.fillStyle = '#262b34';
+    g.fillRect(r * 0.5, -r * 0.12, r * 0.6, r * 0.045);
+    g.fillRect(r * 0.5, r * 0.075, r * 0.6, r * 0.045);
+    g.fillStyle = 'rgba(16,20,28,0.9)';
+    for (const en of t.engines) {
+      g.fillRect(en[0] * r + r * 0.1, en[1] * r - r * 0.14, r * 0.22, r * 0.035);
+      g.fillRect(en[0] * r + r * 0.1, en[1] * r + r * 0.1, r * 0.22, r * 0.035);
     }
     g.restore();
     // deck + accent
     tracePolyOn(g, insetPoly(t.shape, 0.62), r);
-    g.fillStyle = 'hsla(' + hue + ',12%,66%,0.95)';
+    g.fillStyle = 'hsla(' + hue + ',30%,63%,0.95)';
     g.fill();
     if (t.accent) {
       tracePolyOn(g, t.accent, r);
-      g.fillStyle = 'hsl(' + hue + ',75%,48%)';
+      g.fillStyle = 'hsl(' + hue + ',88%,50%)';
       g.fill();
     }
     // seams
     if (t.deco) {
       g.strokeStyle = 'rgba(18,22,32,0.85)';
-      g.lineWidth = Math.max(1.5, r * 0.05);
+      g.lineWidth = Math.max(1.5, r * 0.045);
       g.beginPath();
       for (const line of t.deco) {
         g.moveTo(line[0][0] * r, line[0][1] * r);
@@ -1221,9 +1286,9 @@
         let diff = nx * LX + ny * LY + nz * LZ;
         if (diff < 0) diff = 0;
         let spec = nx * HX + ny * HY + nz * HZ;
-        spec = spec < 0 ? 0 : Math.pow(spec, 26) * 160;
-        const rim = Math.pow(1 - nz, 1.6) * 70;
-        const lum = 0.33 + 0.85 * diff;
+        spec = spec < 0 ? 0 : Math.pow(spec, 30) * 185;
+        const rim = Math.pow(1 - nz, 1.8) * 46;
+        const lum = 0.26 + 0.98 * diff;
         od[i] = Math.min(255, ad[i] * lum + spec + rim * 0.35);
         od[i + 1] = Math.min(255, ad[i + 1] * lum + spec + rim * 0.6);
         od[i + 2] = Math.min(255, ad[i + 2] * lum + spec * 1.06 + rim);
@@ -1239,9 +1304,9 @@
     let cached = atlasCache.get(key);
     if (cached) return cached;
     const t = SHIP_TYPES[typeKey];
-    const r0 = t.radius * 1.35 * scaleMul;
+    const r0 = t.radius * 1.5 * scaleMul;
     const cell = Math.ceil(r0 * 2 * 1.4) + 12;
-    const SS = 2;                       // supersample, downscaled into the atlas
+    const SS = scaleMul > 1.5 ? 2 : 3;  // heavier supersample where sprites are small
     const cs = cell * SS;
     const r = r0 * SS;
     const doc = GLOBAL.document;
@@ -1262,7 +1327,7 @@
         sctx.drawImage(hC, 0, 0);
         hctx.setTransform(1, 0, 0, 1, 0, 0);
         hctx.clearRect(0, 0, cs, cs);
-        hctx.filter = 'blur(' + Math.max(1, SS) + 'px)';
+        hctx.filter = 'blur(' + Math.max(0.8, SS * 0.6) + 'px)';   // tight bevels: sharp, not mushy
         hctx.drawImage(sC, 0, 0);
         hctx.filter = 'none';
       } catch (e) { }
@@ -1281,7 +1346,7 @@
     const isAlly = s.team && G.player && G.player.team && s.team === G.player.team;
     const stealthy = s.t.stealth && !isMe && !isAlly;
     const alpha = stealthy ? 0.35 : 1;
-    const r = s.t.radius * 1.35;
+    const r = s.t.radius * 1.5;
 
     // motion trail (subtle)
     if (s.trail && !stealthy) {
