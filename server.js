@@ -569,11 +569,12 @@ function onMessage(cl, msg) {
       if (now - (cl.fireAt[msg.kind] || 0) < gap) { cl.strikes = (cl.strikes || 0) + 1; if (cl.strikes > 120) dropClient(cl); return; }
       cl.fireAt[msg.kind] = now;
       if (msg.kind === 'gun') {
-        if (!Array.isArray(msg.shots) || msg.shots.length > 3) return;
+        if (!Array.isArray(msg.shots) || msg.shots.length > 4) return;   // twin cannons + multifire
         if (!(msg.dmg <= 900) || !(msg.bounces <= 3)) return;
         if (msg.shots.some(sh => !Number.isFinite(sh.x) || !Number.isFinite(sh.y) || Math.hypot(sh.vx, sh.vy) > 1500)) return;
       } else if (msg.kind === 'bomb') {
-        if (!(msg.level >= 1 && msg.level <= 3) || !(msg.bounces <= 3) || Math.hypot(msg.vx, msg.vy) > 1300) return;
+        if (!(msg.level >= 1 && msg.level <= 3) || !(msg.bounces <= 5) || Math.hypot(msg.vx, msg.vy) > 1300) return;
+        if (!(+msg.prox >= 0 && +msg.prox <= 100)) msg.prox = 15;
       }
       // relay to everyone else, and mirror into the server sim so bots react
       const relay = Object.assign({}, msg, { id: cl.id });

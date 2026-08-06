@@ -42,7 +42,7 @@ const SIM = require(path.join(ROOT, 'sim.js'));
   {
     const Wm = SIM.createWorld({ seed: 7, spawnPrizes: false });
     const van = SIM.makeShip(Wm, 'vanguard', 'local', 'Van', 45);
-    assert(van.multi && van.bounceBullets, 'vanguard ships factory multifire + ricochet');
+    assert(van.multi, 'vanguard ships factory multifire');
 
     const aeg = SIM.makeShip(Wm, 'aegis', 'local', 'Aeg', 215);
     const wb = SIM.makeShip(Wm, 'corsair', 'local', 'Wb', 190);
@@ -139,6 +139,44 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     const warped = SIM.warpToBeacon(Ws, ally);
     assert(warped && Math.hypot(ally.x - comet.x, ally.y - comet.y) < 350, 'comet warp beacon teleports allies');
     assert(SIM.drainEvents(Ws).some(e => e.e === 'warp'), 'warp event emitted');
+  }
+
+  // combat feel: universal ricochet, twin cannons, bouncing bombs, prox fuses, strafe
+  {
+    const Wc = SIM.createWorld({ seed: 21, spawnPrizes: false });
+    const cs = SIM.makeShip(Wc, 'corsair', 'local', 'C', 200, 0);
+    const sp = SIM.randClearPoint(Wc);
+    cs.x = sp.x; cs.y = sp.y; cs.gunCd = 0;
+    SIM.fireGun(Wc, cs);
+    assert(Wc.bullets.length === 1 && Wc.bullets[0].bounces === 2, 'all bullets ricochet by default');
+
+    const co = SIM.makeShip(Wc, 'comet', 'local', 'T', 282, 0);
+    co.x = sp.x; co.y = sp.y; co.gunCd = 0;
+    const before = Wc.bullets.length;
+    SIM.fireGun(Wc, co);
+    assert(Wc.bullets.length - before === 2, 'comet fires twin parallel streams');
+
+    const pa = SIM.makeShip(Wc, 'paladin', 'local', 'P', 210, 0);
+    pa.x = sp.x; pa.y = sp.y; pa.bombCd = 0;
+    SIM.fireBomb(Wc, pa);
+    assert(Wc.bombs[0].bounces === 1 + 2, 'paladin bombs get +2 ricochets');
+    assert(Wc.bombs[0].prox === 12 + 5, 'base bombs have a tight fuse');
+
+    const me2 = SIM.makeShip(Wc, 'meteor', 'local', 'M', 18, 0);
+    me2.x = sp.x; me2.y = sp.y; me2.bombCd = 0;
+    SIM.fireBomb(Wc, me2);
+    assert(Wc.bombs[1].prox === 12 + 10 + 22, 'meteor factory prox fuse widens detonation');
+    assert(SIM.PRIZE_TYPES.some(p => p.n === 'Proximity Fuse'), 'proximity is a green');
+    assert(SIM.SHIP_TYPES.hornet.radarStealth, 'hornet is a sensor ghost');
+
+    // strafe thrusters produce lateral velocity (clean world — no crossfire)
+    const Ws2 = SIM.createWorld({ seed: 22, spawnPrizes: false });
+    const sf = SIM.makeShip(Ws2, 'corsair', 'local', 'S', 200, 0);
+    const sp2 = SIM.randClearPoint(Ws2);
+    sf.x = sp2.x; sf.y = sp2.y; sf.angle = 0; sf.vx = 0; sf.vy = 0;
+    sf.ctl.strafe = 1;
+    for (let i = 0; i < 30; i++) SIM.updateWorld(Ws2, SIM.STEP);
+    assert(sf.vy > 40 && Math.abs(sf.vx) < 20, 'strafe pushes sideways (vy=' + sf.vy.toFixed(0) + ')');
   }
 
   // ghost interpolation with a jitter buffer

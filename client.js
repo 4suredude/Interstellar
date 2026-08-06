@@ -341,7 +341,7 @@
         case 'bomb':
           sndBomb(e.x, e.y);
           flash(e.x, e.y, 30, BOMB_HUES[e.level] || 4);
-          if (mine && G.online) netSend({ t: 'fire', kind: 'bomb', x: e.x, y: e.y, vx: e.vx, vy: e.vy, level: e.level, bounces: e.bounces });
+          if (mine && G.online) netSend({ t: 'fire', kind: 'bomb', x: e.x, y: e.y, vx: e.vx, vy: e.vy, level: e.level, bounces: e.bounces, prox: e.prox });
           break;
         case 'blink': {
           blinkFX(e.x0, e.y0, e.x1, e.y1, e.hue);
@@ -1969,8 +1969,8 @@
 
     // loadout
     const items = [
-      'GUN L' + p.gunLevel + (p.multi ? (p.multiOn ? ' MF' : ' mf') : '') + (p.bounceBullets ? ' ↺' : ''),
-      'BOMB L' + p.bombLevel,
+      'GUN L' + p.gunLevel + (p.multi ? ' MF' : ''),
+      'BOMB L' + p.bombLevel + (p.proxPlus ? ' PX' + p.proxPlus : ''),
       'E ×' + p.repels,
       'Q ×' + p.bursts,
       p.t.blink ? (p.blinkCd > 0 ? 'R BLINK ' + p.blinkCd.toFixed(1) : 'R BLINK ✓') : 'R ×' + p.rockets,
@@ -2048,7 +2048,7 @@
         ctx.fillRect(rx + s.x * k - 2, ry + s.y * k - 2, 4, 4);
       } else {
         const ally = s.team && G.player && G.player.team && s.team === G.player.team;
-        if (s.t.stealth && !ally) continue; // enemy daggers don't paint on radar
+        if ((s.t.stealth || s.t.radarStealth) && !ally) continue; // ghosts don't paint on radar
         ctx.fillStyle = ally ? 'rgba(120,180,255,0.95)' : 'rgba(255,120,90,0.9)';
         ctx.fillRect(rx + s.x * k - 1.5, ry + s.y * k - 1.5, 3, 3);
       }
@@ -2155,8 +2155,12 @@
     statBar(sx + 20 + col * 2, sy + 32, col - 20, 'BOMBS', (t.bombLevel / t.bombDelay) / 1.15, t.hue);
     const traits = [];
     if (t.stealth) traits.push('STEALTH: invisible to radar, dim to eyes');
+    if (t.radarStealth) traits.push('SENSOR GHOST: never paints on enemy radar');
+    if (t.dualGuns) traits.push('TWIN CANNONS: dual parallel bullet streams');
+    if (t.bombBounce) traits.push('BOUNCING BOMBS: +' + t.bombBounce + ' wall ricochets');
+    if (t.proxStart) traits.push('FACTORY PROXIMITY FUSES');
     if (t.repelRegen) traits.push('REPEL RACK: restocks every ' + t.repelRegen + 's');
-    if (t.startMulti) traits.push('FACTORY MULTIFIRE + RICOCHET ROUNDS');
+    if (t.startMulti) traits.push('FACTORY MULTIFIRE');
     if (t.armor) traits.push('PLATING: takes ' + Math.round((1 - t.armor) * 100) + '% less damage');
     if (t.leech) traits.push('LEECH: steals ' + Math.round(t.leech * 100) + '% of damage dealt as energy');
     if (t.blink) traits.push('BLINK DRIVE: R teleports 240m forward, through walls');
@@ -2201,13 +2205,12 @@
     ctx.fillRect(0, 0, vw, vh);
     txt(G.online ? 'MENU  (the zone keeps fighting)' : 'PAUSED', vw / 2, vh / 2 - 120, 34, '#c8ecff', 'center', 800);
     const lines = [
-      'W / ↑            thrust',
-      'S / ↓            reverse thrust',
-      'A D / ← →      rotate',
-      'SPACE / CTRL   guns',
-      'SHIFT / B      bomb',
-      'E repel   Q burst   R rocket/blink   X multifire',
-      'T              warp to allied Comet (squads)',
+      '← →            rotate',
+      'W / ↑            thrust        S / ↓   reverse',
+      'A / D            strafe left / right',
+      'SPACE / CTRL   guns (bullets always ricochet)',
+      'TAB / SHIFT    bomb',
+      'E repel   Q burst   R rocket/blink   T warp-to-Comet',
       'ENTER          chat · /duel <name> · /votemap · /stats',
       'M mute         N music        F fullscreen',
       '',
@@ -2363,19 +2366,21 @@
   function updatePlayerInput() {
     const p = G.player;
     if (!p || p.dead || G.state !== 'play' || (G.paused && !G.online) || G.chatOpen) {
-      if (p && (G.chatOpen || G.paused)) { p.ctl.turn = 0; p.ctl.thrust = 0; p.ctl.gun = false; p.ctl.bomb = false; }
+      if (p && (G.chatOpen || G.paused)) { p.ctl.turn = 0; p.ctl.thrust = 0; p.ctl.strafe = 0; p.ctl.gun = false; p.ctl.bomb = false; }
       return;
     }
     const c = p.ctl;
-    c.turn = (keys.ArrowLeft || keys.KeyA ? -1 : 0) + (keys.ArrowRight || keys.KeyD ? 1 : 0);
-    c.thrust = keys.ArrowUp || keys.KeyW ? 1 : keys.ArrowDown || keys.KeyS ? -0.55 : 0;
+    // arrows rotate + thrust (classic); A/D strafe sideways; W/S also thrust
+    c.turn = (keys.ArrowLeft ? -1 : 0) + (keys.ArrowRight ? 1 : 0);
+    c.thrust = keys.ArrowUp || keys.KeyW ? 1 : keys.ArrowDown || keys.KeyS ? -1 : 0;
+    c.strafe = (keys.KeyA ? -1 : 0) + (keys.KeyD ? 1 : 0);
     c.gun = !!(keys.Space || keys.ControlLeft || keys.ControlRight);
-    c.bomb = !!(keys.ShiftLeft || keys.ShiftRight || keys.KeyB);
+    c.bomb = !!(keys.Tab || keys.ShiftLeft || keys.ShiftRight || keys.KeyB);
   }
 
-  const HANDLED = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space',
+  const HANDLED = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab',
     'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'Enter', 'Backspace', 'Escape',
-    'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyB', 'KeyE', 'KeyQ', 'KeyR', 'KeyT', 'KeyX', 'KeyM', 'KeyN', 'KeyP', 'KeyF', 'KeyO']);
+    'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyB', 'KeyE', 'KeyQ', 'KeyR', 'KeyT', 'KeyM', 'KeyN', 'KeyP', 'KeyF', 'KeyO']);
 
   function onKeyDown(e) {
     audioInit();
@@ -2481,10 +2486,6 @@
       else if (code === 'KeyQ') SIM.doBurst(G.W, p);
       else if (code === 'KeyR') { if (p.t.blink) SIM.doBlink(G.W, p); else SIM.fireRocket(G.W, p); }
       else if (code === 'KeyT') SIM.warpToBeacon(G.W, p);
-      else if (code === 'KeyX' && p.multi) {
-        p.multiOn = !p.multiOn;
-        say('MultiFire ' + (p.multiOn ? 'ON' : 'OFF'), '#8df');
-      }
     }
   }
   function onKeyUp(e) {

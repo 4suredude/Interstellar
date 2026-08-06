@@ -60,8 +60,8 @@
       cockpit: [0.38, 0, 0.2, 0.13], engines: [[-0.4, 0]],
     },
     meteor: {
-      label: 'Meteor', hue: 18,
-      desc: 'Bomber. Splash artillery with bouncing bombs that clear whole corridors.',
+      label: 'Meteor', hue: 18, proxStart: 1,
+      desc: 'Bomber. Factory proximity fuses — its splash artillery detonates near hulls.',
       maxEnergy: 1700, recharge: 95, thrust: 200, maxSpeed: 310, turn: 3.0,
       radius: 12, bounce: 0.5,
       gunLevel: 1, gunDelay: 0.6, gunCost: 120, gunSpeed: 600, gunDmgMul: 0.9,
@@ -72,8 +72,8 @@
       cockpit: [0.32, 0, 0.19, 0.13], engines: [[-0.62, 0.3], [-0.62, -0.3]],
     },
     hornet: {
-      label: 'Hornet', hue: 130,
-      desc: 'Bullet hose. Weak pellets, relentless rate of fire, monster recharge.',
+      label: 'Hornet', hue: 130, radarStealth: true,
+      desc: 'Bullet hose. Relentless fire, monster recharge — and it ghosts off enemy radar.',
       maxEnergy: 1400, recharge: 135, thrust: 215, maxSpeed: 330, turn: 3.6,
       radius: 11, bounce: 0.55,
       gunLevel: 1, gunDelay: 0.16, gunCost: 45, gunSpeed: 620, gunDmgMul: 0.5,
@@ -96,8 +96,8 @@
       cockpit: [0.35, 0, 0.24, 0.19], engines: [[-0.92, 0.28], [-0.92, -0.28]],
     },
     comet: {
-      label: 'Comet', hue: 282,
-      desc: 'Interceptor. Fastest hull in the zone — hit, run, and never stop moving.',
+      label: 'Comet', hue: 282, dualGuns: true, dualShotMul: 0.62,
+      desc: 'Interceptor. Twin linked cannons, fastest hull in the zone — hit and run.',
       maxEnergy: 1250, recharge: 120, thrust: 285, maxSpeed: 410, turn: 4.3,
       radius: 10, bounce: 0.65,
       gunLevel: 1, gunDelay: 0.3, gunCost: 80, gunSpeed: 640, gunDmgMul: 0.75,
@@ -120,8 +120,8 @@
       cockpit: [0.25, 0, 0.15, 0.1], engines: [[-0.55, 0]],
     },
     paladin: {
-      label: 'Paladin', hue: 210,
-      desc: 'The all-rounder. Broad wings, dependable guns, no bad matchups.',
+      label: 'Paladin', hue: 210, bombBounce: 2,
+      desc: 'The all-rounder. Dependable guns and bombs that ricochet down corridors.',
       maxEnergy: 1600, recharge: 115, thrust: 225, maxSpeed: 340, turn: 3.2,
       radius: 12, bounce: 0.55,
       gunLevel: 2, gunDelay: 0.42, gunCost: 110, gunSpeed: 640, gunDmgMul: 1.0,
@@ -146,9 +146,9 @@
     // ---- NOVA class: the new generation ----
     vanguard: {
       label: 'Vanguard', hue: 45, cls: 'nova',
-      desc: 'Nova-class gunship. Ships MultiFire and ricochet rounds straight from the factory.',
+      desc: 'Nova-class gunship. Ships factory MultiFire — a wall of lead from spawn.',
       maxEnergy: 1450, recharge: 110, thrust: 240, maxSpeed: 345, turn: 3.5,
-      radius: 11, bounce: 0.6, startMulti: true, startBounce: true,
+      radius: 11, bounce: 0.6, startMulti: true,
       gunLevel: 2, gunDelay: 0.4, gunCost: 130, gunSpeed: 640, gunDmgMul: 0.95,
       bombLevel: 1, bombDelay: 2.4, bombCost: 430, bombSpeed: 310,
       shape: [[1.3, 0], [0.35, 0.3], [0.0, 0.95], [-0.55, 0.75], [-0.35, 0.25], [-0.85, 0.45], [-0.7, 0], [-0.85, -0.45], [-0.35, -0.25], [-0.55, -0.75], [0.0, -0.95], [0.35, -0.3]],
@@ -205,7 +205,7 @@
     { n: 'Gun Upgrade', w: 2, ok: s => s.gunLevel < 3, f: s => { s.gunLevel++; } },
     { n: 'Bomb Upgrade', w: 2, ok: s => s.bombLevel < 3, f: s => { s.bombLevel++; } },
     { n: 'MultiFire', w: 1, ok: s => !s.multi, f: s => { s.multi = true; s.multiOn = true; } },
-    { n: 'Bouncing Bullets', w: 1, ok: s => !s.bounceBullets, f: s => { s.bounceBullets = true; } },
+    { n: 'Proximity Fuse', w: 2, ok: s => s.proxPlus < 2, f: s => { s.proxPlus++; } },
     { n: 'Repel', w: 2, ok: s => s.repels < (s.t.repelCap || 3), f: s => { s.repels++; } },
     { n: 'Burst', w: 2, ok: s => s.bursts < 3, f: s => { s.bursts++; } },
     { n: 'Rocket', w: 1, ok: s => s.rockets < 2, f: s => { s.rockets++; } },
@@ -399,7 +399,7 @@
     s.thrust = t.thrust; s.maxSpeed = t.maxSpeed;
     s.gunLevel = t.gunLevel; s.bombLevel = t.bombLevel;
     s.multi = !!t.startMulti; s.multiOn = !!t.startMulti;
-    s.bounceBullets = !!t.startBounce;
+    s.proxPlus = t.proxStart || 0;
     s.repels = t.repelStart || 1; s.bursts = 1; s.rockets = 0;
     s.bounty = 0;
   }
@@ -418,7 +418,7 @@
       dormant: false,
       dead: false, respawn: 0, safe: 0, flash: 0,
       kills: 0, deaths: 0, score: 0,
-      ctl: { turn: 0, thrust: 0, gun: false, bomb: false },
+      ctl: { turn: 0, thrust: 0, strafe: 0, gun: false, bomb: false },
       ai: { target: null, mode: 'roam', think: rand(0, 0.2), wp: null, err: 0, dodge: 0, dodgeAngle: 0, avoid: 0, wantRepel: false, skill: 0.5 },
       // ghost interpolation
       netX: 0, netY: 0, netVx: 0, netVy: 0, netA: 0, netT: 0, netTh: 0, netFrac: 1,
@@ -507,15 +507,24 @@
     const multi = s.multi && s.multiOn;
     const nx = s.x + Math.cos(s.angle) * (s.t.radius + 6);
     const ny = s.y + Math.sin(s.angle) * (s.t.radius + 6);
-    const spread = multi ? [-0.18, 0, 0.18] : [0];
-    return spread.map(off => {
+    const shots = [];
+    const push = (off, side) => {
       const a = s.angle + off;
-      return {
-        x: nx, y: ny,
+      // side offsets shift the muzzle perpendicular to the nose (twin cannons)
+      const px = nx + Math.cos(s.angle + Math.PI / 2) * side;
+      const py = ny + Math.sin(s.angle + Math.PI / 2) * side;
+      shots.push({
+        x: px, y: py,
         vx: s.vx + Math.cos(a) * s.t.gunSpeed,
         vy: s.vy + Math.sin(a) * s.t.gunSpeed,
-      };
-    });
+      });
+    };
+    if (s.t.dualGuns) {
+      const w = s.t.radius * 0.45;
+      push(0, -w); push(0, w);
+    } else push(0, 0);
+    if (multi) { push(-0.18, 0); push(0.18, 0); }
+    return shots;
   }
   function spawnBullets(W, owner, shots, level, dmg, bounces) {
     for (const sh of shots) {
@@ -533,7 +542,9 @@
     const shots = gunShots(s);
     if (solidAtPx(W, shots[0].x, shots[0].y)) return false;
     s.energy -= cost; s.gunCd = s.t.gunDelay; s.safe = 0;
-    const dmg = bulletDamage(s), bounces = s.bounceBullets ? 2 : 0;
+    // all bullets ricochet — walls are part of your aim
+    const dmg = bulletDamage(s) * (s.t.dualShotMul || 1);
+    const bounces = 2;
     spawnBullets(W, s, shots, s.gunLevel, dmg, bounces);
     ev(W, { e: 'gun', id: s.id, x: s.x, y: s.y, level: s.gunLevel, dmg, bounces, shots });
     return true;
@@ -552,33 +563,37 @@
       x: nx, y: ny,
       vx: s.vx + Math.cos(s.angle) * s.t.bombSpeed,
       vy: s.vy + Math.sin(s.angle) * s.t.bombSpeed,
-      life: 3.4, level: s.bombLevel, bounces: s.bombLevel, owner: s,
+      life: 3.4, level: s.bombLevel,
+      bounces: s.bombLevel + (s.t.bombBounce || 0),
+      prox: 12 + 5 * s.bombLevel + 22 * s.proxPlus,   // greens buy the fuse
+      owner: s,
     };
     W.bombs.push(b);
-    ev(W, { e: 'bomb', id: s.id, x: b.x, y: b.y, vx: b.vx, vy: b.vy, level: b.level, bounces: b.bounces });
+    ev(W, { e: 'bomb', id: s.id, x: b.x, y: b.y, vx: b.vx, vy: b.vy, level: b.level, bounces: b.bounces, prox: b.prox });
     return true;
   }
   function injectBomb(W, owner, msg) {
     W.bombs.push({
       x: msg.x, y: msg.y, vx: msg.vx, vy: msg.vy,
-      life: 3.4, level: msg.level, bounces: msg.bounces, owner,
+      life: 3.4, level: msg.level, bounces: msg.bounces,
+      prox: Math.min(100, msg.prox || 15), owner,
     });
   }
 
   function repelAt(W, s, x, y) {
-    const R = 230;
+    const R = 300;   // repels are a huge factor — make them felt
     for (const o of W.ships) {
       if (o === s || o.dead) continue;
       const d = hyp(o.x - x, o.y - y);
       if (d < R) {
-        const k = (1 - d / R) * 640, inv = 1 / Math.max(1, d);
+        const k = (1 - d / R) * 820, inv = 1 / Math.max(1, d);
         o.vx += (o.x - x) * inv * k;
         o.vy += (o.y - y) * inv * k;
       }
     }
     const push = b => {
       const d = hyp(b.x - x, b.y - y);
-      if (b.owner !== s && d < R) {
+      if (b.owner !== s && d < 300) {
         const sp = hyp(b.vx, b.vy) * 1.1, inv = 1 / Math.max(1, d);
         b.vx = (b.x - x) * inv * sp;
         b.vy = (b.y - y) * inv * sp;
@@ -881,9 +896,16 @@
       th = 1; maxSp *= 1.9; power *= 2.6;
     }
     if (th !== 0) {
-      const p = power * (th > 0 ? th : th * 0.6);
+      // real backthrust: reversing is a fighting move, not a suggestion
+      const p = power * (th > 0 ? th : th * 0.85);
       s.vx += Math.cos(s.angle) * p * dt;
       s.vy += Math.sin(s.angle) * p * dt;
+    }
+    // lateral strafe thrusters: full omnidirectional control
+    if (c.strafe) {
+      const sp2 = power * 0.75 * clamp(c.strafe, -1, 1);
+      s.vx += Math.cos(s.angle + Math.PI / 2) * sp2 * dt;
+      s.vy += Math.sin(s.angle + Math.PI / 2) * sp2 * dt;
     }
     const sp = hyp(s.vx, s.vy);
     if (sp > maxSp) {
@@ -996,11 +1018,10 @@
           else boom = true;
         } else b.y = by;
         if (boom) break;
-        const prox = 22 + 8 * b.level;
         for (const s of W.ships) {
           if (s.dead || s === b.owner) continue;
           if (s.team && b.owner && s.team === b.owner.team) continue;
-          if (hyp(s.x - b.x, s.y - b.y) < s.t.radius + prox) { boom = true; break; }
+          if (hyp(s.x - b.x, s.y - b.y) < s.t.radius + (b.prox || 15)) { boom = true; break; }
         }
       }
       if (boom) {

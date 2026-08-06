@@ -91,19 +91,19 @@ and both sides run the same simulation code (`sim.js`) on the same map seed.
 | Ship | Character |
 | --- | --- |
 | **Corsair** | The duelist — heavy single shots |
-| **Meteor** | Bomber with bouncing splash artillery |
-| **Hornet** | Rapid-fire bullet hose, monster recharge |
+| **Meteor** | Bomber with factory proximity-fused splash artillery |
+| **Hornet** | Rapid-fire bullet hose — a sensor ghost that never paints on radar |
 | **Titan** | Slow dreadnought, colossal energy, L3 bombs |
-| **Comet** | Fastest interceptor in the zone |
+| **Comet** | Fastest interceptor in the zone, twin linked cannons |
 | **Dagger** | Tiny assassin — off enemy radar, dim to the eye |
-| **Paladin** | Broad-winged all-rounder with dependable guns |
+| **Paladin** | Broad-winged all-rounder whose bombs ricochet down corridors |
 | **Warden** | Support hunter with a self-restocking repel rack |
 
 A new generation of hulls joins the fleet — each with a mechanic all its own:
 
 | NOVA ship | New mechanic |
 | --- | --- |
-| **Vanguard** | Ships factory MultiFire + ricochet rounds from spawn |
+| **Vanguard** | Ships factory MultiFire from spawn — a wall of lead |
 | **Aegis** | Composite plating absorbs 28% of all incoming damage |
 | **Reaper** | Leeches 30% of the damage it deals back as energy |
 | **Phantom** | Blink drive: `R` teleports 240m forward — straight through walls |
@@ -113,10 +113,12 @@ A new generation of hulls joins the fleet — each with a mechanic all its own:
 - **Inertial flight** — no friction, no brakes; ships ricochet off walls.
 - **Energy warfare** — one bar is shields *and* ammo; a hit that lands with
   nothing left kills you.
-- **Leveled weapons** — L1–L3 color-coded bullets and bombs with splash,
-  knockback, proximity fuses, wall bounces — and your own bombs hurt you.
-- **Greens** — anonymous prize boxes: gun/bomb upgrades, MultiFire, bouncing
-  bullets, repels, bursts, rockets, energy/recharge/thrust/speed boosts.
+- **Leveled weapons** — L1–L3 color-coded bullets and bombs with splash and
+  knockback; **every bullet ricochets off walls**, bombs detonate on contact
+  with a tight fuse, and **Proximity Fuse greens** widen the detonation
+  radius — and your own bombs hurt you.
+- **Greens** — anonymous prize boxes: gun/bomb upgrades, MultiFire, proximity
+  fuses, repels, bursts, rockets, energy/recharge/thrust/speed boosts.
 - **Repel / Burst / Rocket** specials, corner radar, green kill-feed chat,
   bounty, and full loadout reset on death — dying costs you everything you
   collected, which is exactly why it matters.
@@ -157,15 +159,15 @@ A new generation of hulls joins the fleet — each with a mechanic all its own:
 | Key | Action |
 | --- | --- |
 | `W` / `↑` | Thrust |
-| `S` / `↓` | Reverse thrust |
-| `A` `D` / `←` `→` | Rotate |
-| `Space` / `Ctrl` | Guns |
-| `Shift` / `B` | Bomb |
+| `S` / `↓` | Reverse thrust (near-full power) |
+| `←` `→` | Rotate |
+| `A` / `D` | Strafe left / right |
+| `Space` / `Ctrl` | Guns — all bullets ricochet off walls |
+| `Tab` / `Shift` | Bomb |
 | `E` | Repel |
 | `Q` | Burst |
 | `R` | Rocket (Blink on the Phantom) |
 | `T` | Warp to your team's Comet |
-| `X` | Toggle MultiFire |
 | `Enter` | Chat (online) — `/duel` `/accept` `/stats` `/votemap` `/help`, `//` for team |
 | `P` / `Esc` | Pause / menu |
 | `M` | Mute all · `N` Music on/off · `F` Fullscreen |
