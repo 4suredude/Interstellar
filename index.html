@@ -24,22 +24,37 @@
     d.textContent += (d.textContent ? '\n\n' : 'INTERSTELLAR could not start\n\n') + msg;
   }
   window.__showErr = show;
+  window.__scriptFail = function (name) {
+    var folder = location.href.replace(/[^\/\\]*$/, '');
+    show('Missing file: ' + name + '\n' +
+      'This page was opened from:\n  ' + folder + '\n' +
+      'but ' + name + ' is not there. You are probably opening an old or\n' +
+      'partial copy — open index.html from the full cloned repository\n' +
+      '(the folder must contain index.html, sim.js, AND client.js).\n\n' +
+      'Bulletproof alternative: in the full game folder run\n' +
+      '  node server.js\n' +
+      'then open  http://localhost:8666  in any browser.');
+  };
   window.onerror = function (msg, src, line) {
     show(msg + '\n  at ' + (src || '?') + ':' + (line || '?') +
       '\n\nIf this mentions unexpected syntax, your browser may be too old — use a current Chrome, Edge, or Firefox.');
   };
   window.addEventListener('load', function () {
     if (!window.SIM || !window.__interstellar) {
-      show('The game scripts did not load.\n' +
+      var missing = [];
+      if (!window.SIM) missing.push('sim.js');
+      if (!window.__interstellar) missing.push('client.js');
+      show('Scripts that did not run: ' + missing.join(', ') + '\n' +
+        'Opened from: ' + location.href + '\n\n' +
         '- index.html, sim.js, and client.js must all be in the SAME folder\n' +
-        '  (clone or download the whole repository, not just this file).\n' +
+        '  (clone or download the whole repository, not just one file).\n' +
         '- Easiest path: install Node.js, run  node server.js  in the game\n' +
         '  folder, then open  http://localhost:8666  in your browser.');
     }
   });
 })();
 </script>
-<script src="sim.js"></script>
-<script src="client.js"></script>
+<script src="sim.js" onerror="__scriptFail('sim.js')"></script>
+<script src="client.js" onerror="__scriptFail('client.js')"></script>
 </body>
 </html>
