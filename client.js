@@ -32,6 +32,7 @@
     chatOpen: false, chatStr: '',
     zoneStatus: null, zoneMode: '', sideFlip: 0, duel: null, myElo: 0,
     lastKillerId: 0, coreOwner: 0,
+    shoot: null, shootT: 6,
   };
   const keys = Object.create(null);
   let canvas = null, ctx = null, vw = 1280, vh = 720, dpr = 1;
@@ -932,6 +933,23 @@
       G.banner.t += dt;
       if (G.banner.t > G.banner.dur) G.banner = null;
     }
+    // shooting stars streak by every so often
+    if (G.shoot) {
+      G.shoot.x += G.shoot.vx * dt;
+      G.shoot.y += G.shoot.vy * dt;
+      G.shoot.life -= dt;
+      if (G.shoot.life <= 0) G.shoot = null;
+    } else {
+      G.shootT -= dt;
+      if (G.shootT <= 0) {
+        G.shootT = rand(8, 22);
+        const dir = Math.random() < 0.5 ? 1 : -1;
+        G.shoot = {
+          x: dir > 0 ? -30 : vw + 30, y: rand(0, vh * 0.6),
+          vx: dir * rand(500, 800), vy: rand(120, 320), life: 0.9,
+        };
+      }
+    }
 
     if (G.player && !G.player.dead && G.player.energy < G.player.maxEnergy * 0.25) {
       G.beepT -= dt;
@@ -971,9 +989,186 @@
   }
 
   // ---------------------------------------------------------------- backdrop
+  // Deep space with places in it: planets, a black hole, a distant galaxy,
+  // flare stars, dust, nebulae — all parallax layers, all lit from the same
+  // top-left as the ships, so flying feels like actually traveling.
   const stars = [];
   const nebulae = [];
+  const bgObjs = [];
+  const dust = [];
+
+  function makePlanet(rad, hue, style, rng) {
+    const doc = GLOBAL.document;
+    const pad = Math.ceil(rad * (style === 'ringed' ? 1.9 : 1.4));
+    const c = doc.createElement('canvas');
+    c.width = c.height = pad * 2;
+    const g = c.getContext('2d');
+    const cx = pad, cy = pad;
+    const ring = front => {
+      if (style !== 'ringed') return;
+      g.save();
+      g.translate(cx, cy);
+      g.rotate(-0.45);
+      g.scale(1, 0.32);
+      g.beginPath();
+      g.rect(-pad * 3, front ? 0 : -pad * 3, pad * 6, pad * 3);
+      g.clip();
+      for (let i = 0; i < 3; i++) {
+        const rr = rad * (1.35 + i * 0.16);
+        g.beginPath();
+        g.arc(0, 0, rr, 0, TAU);
+        g.strokeStyle = 'hsla(' + (hue + 22) + ',32%,' + (58 - i * 9) + '%,' + (0.55 - i * 0.13).toFixed(2) + ')';
+        g.lineWidth = rad * (0.11 - i * 0.02);
+        g.stroke();
+      }
+      g.restore();
+    };
+    ring(false);                                     // ring passes behind the limb
+    // atmosphere halo
+    const ag = g.createRadialGradient(cx, cy, rad * 0.82, cx, cy, rad * 1.28);
+    ag.addColorStop(0, 'hsla(' + hue + ',70%,62%,0)');
+    ag.addColorStop(0.7, 'hsla(' + hue + ',70%,62%,0.26)');
+    ag.addColorStop(1, 'hsla(' + hue + ',70%,62%,0)');
+    g.fillStyle = ag;
+    g.beginPath(); g.arc(cx, cy, rad * 1.28, 0, TAU); g.fill();
+    // body
+    g.save();
+    g.beginPath(); g.arc(cx, cy, rad, 0, TAU); g.clip();
+    g.fillStyle = 'hsl(' + hue + ',45%,40%)';
+    g.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
+    if (style === 'rock') {
+      for (let i = 0; i < 46; i++) {
+        const px = cx + (rng() * 2 - 1) * rad, py = cy + (rng() * 2 - 1) * rad;
+        const pr = rad * (0.05 + rng() * 0.2);
+        g.fillStyle = 'hsla(' + (hue + rng() * 40 - 20) + ',36%,' + (26 + rng() * 36) + '%,0.55)';
+        g.beginPath(); g.arc(px, py, pr, 0, TAU); g.fill();
+      }
+    } else {
+      // banded gas giant
+      let y = -rad;
+      while (y < rad) {
+        const bh = rad * (0.05 + rng() * 0.12);
+        g.fillStyle = 'hsla(' + (hue + rng() * 30 - 15) + ',52%,' + (34 + rng() * 30) + '%,0.5)';
+        g.fillRect(cx - rad, cy + y, rad * 2, bh);
+        y += bh + rad * rng() * 0.06;
+      }
+    }
+    // spherical shading, sun from the top-left like everything else
+    const sg = g.createRadialGradient(cx - rad * 0.45, cy - rad * 0.45, rad * 0.1, cx, cy, rad * 1.02);
+    sg.addColorStop(0, 'rgba(255,255,255,0.28)');
+    sg.addColorStop(0.5, 'rgba(0,0,0,0)');
+    sg.addColorStop(0.82, 'rgba(3,5,14,0.55)');
+    sg.addColorStop(1, 'rgba(1,2,8,0.96)');
+    g.fillStyle = sg;
+    g.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
+    g.restore();
+    ring(true);                                      // ring passes in front
+    return c;
+  }
+
+  function makeBlackHole(size) {
+    const doc = GLOBAL.document;
+    const c = doc.createElement('canvas');
+    c.width = c.height = size * 2;
+    const g = c.getContext('2d');
+    const cx = size, cy = size;
+    // accretion disk
+    g.save();
+    g.translate(cx, cy);
+    g.rotate(-0.5);
+    g.scale(1, 0.3);
+    const dg = g.createRadialGradient(0, 0, size * 0.28, 0, 0, size * 0.95);
+    dg.addColorStop(0, 'rgba(255,242,225,0.95)');
+    dg.addColorStop(0.25, 'rgba(255,180,95,0.75)');
+    dg.addColorStop(0.6, 'rgba(210,90,50,0.32)');
+    dg.addColorStop(1, 'rgba(130,45,70,0)');
+    g.fillStyle = dg;
+    g.beginPath(); g.arc(0, 0, size * 0.95, 0, TAU); g.fill();
+    g.globalCompositeOperation = 'destination-out';
+    g.beginPath(); g.arc(0, 0, size * 0.27, 0, TAU); g.fill();
+    g.restore();
+    // photon ring + lensed light
+    g.strokeStyle = 'rgba(255,232,205,0.9)';
+    g.lineWidth = Math.max(1.5, size * 0.018);
+    g.beginPath(); g.arc(cx, cy, size * 0.3, 0, TAU); g.stroke();
+    g.strokeStyle = 'rgba(255,200,140,0.3)';
+    g.lineWidth = size * 0.05;
+    g.beginPath(); g.arc(cx, cy, size * 0.335, 0, TAU); g.stroke();
+    // event horizon
+    const eh = g.createRadialGradient(cx, cy, size * 0.05, cx, cy, size * 0.29);
+    eh.addColorStop(0, '#000');
+    eh.addColorStop(0.88, '#000');
+    eh.addColorStop(1, 'rgba(45,65,130,0.55)');
+    g.fillStyle = eh;
+    g.beginPath(); g.arc(cx, cy, size * 0.29, 0, TAU); g.fill();
+    return c;
+  }
+
+  function makeGalaxy(size, rng) {
+    const doc = GLOBAL.document;
+    const c = doc.createElement('canvas');
+    c.width = c.height = size * 2;
+    const g = c.getContext('2d');
+    const cx = size, cy = size;
+    g.save();
+    g.translate(cx, cy);
+    g.rotate(0.6);
+    // core glow
+    const cg = g.createRadialGradient(0, 0, 1, 0, 0, size * 0.32);
+    cg.addColorStop(0, 'rgba(255,235,215,0.85)');
+    cg.addColorStop(0.5, 'rgba(230,190,255,0.3)');
+    cg.addColorStop(1, 'rgba(200,170,255,0)');
+    g.fillStyle = cg;
+    g.beginPath(); g.arc(0, 0, size * 0.32, 0, TAU); g.fill();
+    // two spiral arms of stars
+    for (let arm = 0; arm < 2; arm++) {
+      for (let i = 0; i < 240; i++) {
+        const th = i / 240 * 3.6 + arm * Math.PI;
+        const rr = size * 0.06 * Math.exp(0.62 * (i / 240) * 3.6) * 0.42;
+        if (rr > size * 0.95) break;
+        const jx = (rng() * 2 - 1) * size * 0.05, jy = (rng() * 2 - 1) * size * 0.05;
+        const px = Math.cos(th) * rr + jx, py = Math.sin(th) * rr * 0.62 + jy;
+        const a = (1 - rr / size) * (0.25 + rng() * 0.5);
+        g.fillStyle = rng() < 0.12
+          ? 'rgba(255,205,230,' + a.toFixed(3) + ')'
+          : 'rgba(210,225,255,' + a.toFixed(3) + ')';
+        g.fillRect(px, py, rng() < 0.2 ? 2 : 1, 1);
+      }
+    }
+    g.restore();
+    return c;
+  }
+
+  function makeFlareStar(size, tint) {
+    const doc = GLOBAL.document;
+    const c = doc.createElement('canvas');
+    c.width = c.height = size * 2;
+    const g = c.getContext('2d');
+    const cx = size, cy = size;
+    const core = g.createRadialGradient(cx, cy, 0, cx, cy, size * 0.5);
+    core.addColorStop(0, 'rgba(255,255,255,1)');
+    core.addColorStop(0.25, 'rgba(' + tint + ',0.8)');
+    core.addColorStop(1, 'rgba(' + tint + ',0)');
+    g.fillStyle = core;
+    g.fillRect(0, 0, size * 2, size * 2);
+    // diffraction spikes
+    for (const rot of [0, Math.PI / 2]) {
+      g.save();
+      g.translate(cx, cy);
+      g.rotate(rot);
+      const sp = g.createLinearGradient(-size, 0, size, 0);
+      sp.addColorStop(0, 'rgba(' + tint + ',0)');
+      sp.addColorStop(0.5, 'rgba(255,255,255,0.9)');
+      sp.addColorStop(1, 'rgba(' + tint + ',0)');
+      g.fillStyle = sp;
+      g.fillRect(-size, -Math.max(1, size * 0.02), size * 2, Math.max(2, size * 0.04));
+      g.restore();
+    }
+    return c;
+  }
+
   function initBackdrop() {
+    const doc = GLOBAL.document;
     stars.length = 0;
     const layers = [[170, 0.22, 1], [100, 0.45, 1.6], [55, 0.75, 2.3]];
     const tints = ['190,210,255', '255,240,220', '170,225,255', '255,205,225'];
@@ -983,15 +1178,16 @@
           x: rand(0, 4000), y: rand(0, 4000), z, size: size * rand(0.6, 1.3),
           tw: rand(0, TAU), tint: tints[irand(tints.length)],
         });
+    dust.length = 0;
+    for (let i = 0; i < 260; i++)
+      dust.push({ x: rand(0, 4000), y: rand(0, 4000), a: rand(0.15, 0.5) });
     nebulae.length = 0;
-    const doc = GLOBAL.document;
     const hues = [205, 275, 320, 185, 250, 160];
     for (let i = 0; i < 6; i++) {
       const c = doc.createElement('canvas');
       c.width = 512; c.height = 512;
       const g = c.getContext('2d');
       const hue = hues[i % hues.length];
-      // layered blobs give the cloud some internal structure
       for (let b = 0; b < 7; b++) {
         const bx = 256 + rand(-110, 110), by = 256 + rand(-110, 110);
         const br = rand(60, 180);
@@ -1004,6 +1200,22 @@
       }
       nebulae.push({ c, x: rand(0, WORLD), y: rand(0, WORLD), r: rand(380, 700), a: rand(0.35, 0.6) });
     }
+    // deep-space set pieces
+    bgObjs.length = 0;
+    const rng = SIM.mulberry32((Math.random() * 1e9) | 0);
+    const planetHues = [rand(10, 40), rand(170, 220), rand(270, 330)];
+    bgObjs.push({ c: makePlanet(150, planetHues[0], 'ringed', rng), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.16, a: 0.8, add: false });
+    bgObjs.push({ c: makePlanet(110, planetHues[1], 'gas', rng), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.12, a: 0.75, add: false });
+    bgObjs.push({ c: makePlanet(60, planetHues[2], 'rock', rng), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.09, a: 0.72, add: false });
+    bgObjs.push({ c: makeBlackHole(170), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.13, a: 0.95, add: true, rotV: 0.02 });
+    bgObjs.push({ c: makeGalaxy(190, rng), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.06, a: 0.85, add: true });
+    const flareTints = ['200,220,255', '255,230,200', '255,210,225'];
+    for (let i = 0; i < 8; i++) {
+      bgObjs.push({
+        c: makeFlareStar(rand(18, 44), flareTints[irand(flareTints.length)]),
+        x: rand(0, WORLD), y: rand(0, WORLD), z: rand(0.07, 0.12), a: rand(0.5, 0.9), add: true, tw: rand(0, TAU),
+      });
+    }
   }
 
   function drawBackdrop() {
@@ -1013,16 +1225,54 @@
     sky.addColorStop(1, '#020308');
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, vw, vh);
+    // farthest layer: unresolved star dust
+    ctx.fillStyle = 'rgba(200,215,255,0.5)';
+    for (const d of dust) {
+      const sx = ((d.x - G.cam.x * 0.045) % (vw + 40) + vw + 40) % (vw + 40) - 20;
+      const sy = ((d.y - G.cam.y * 0.045) % (vh + 40) + vh + 40) % (vh + 40) - 20;
+      ctx.globalAlpha = d.a;
+      ctx.fillRect(sx, sy, 1, 1);
+    }
+    ctx.globalAlpha = 1;
+    // set pieces: galaxy, planets, black hole, flare stars (parallax-wrapped)
+    for (const o of bgObjs) {
+      const w = o.c.width, h = o.c.height;
+      const sx = ((o.x - G.cam.x * o.z) % (vw + w) + vw + w) % (vw + w) - w;
+      const sy = ((o.y - G.cam.y * o.z) % (vh + h) + vh + h) % (vh + h) - h;
+      ctx.globalCompositeOperation = o.add ? 'lighter' : 'source-over';
+      ctx.globalAlpha = o.a * (o.tw == null ? 1 : 0.7 + 0.3 * Math.sin(G.time * 1.3 + o.tw));
+      if (o.rotV) {
+        ctx.save();
+        ctx.translate(sx + w / 2, sy + h / 2);
+        ctx.rotate(G.time * o.rotV);
+        ctx.drawImage(o.c, -w / 2, -h / 2);
+        ctx.restore();
+      } else {
+        ctx.drawImage(o.c, sx, sy);
+      }
+    }
+    ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'lighter';
     for (const nb of nebulae) {
       const px = nb.x - G.cam.x * 0.14, py = nb.y - G.cam.y * 0.14;
       const wx = ((px % (vw + 1100)) + vw + 1100) % (vw + 1100) - 550;
       const wy = ((py % (vh + 1100)) + vh + 1100) % (vh + 1100) - 550;
-      ctx.globalAlpha = nb.a * 0.45;
+      ctx.globalAlpha = nb.a * 0.5;
       ctx.drawImage(nb.c, wx - nb.r, wy - nb.r, nb.r * 2, nb.r * 2);
     }
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
+    // occasional shooting star
+    if (G.shoot) {
+      const s = G.shoot;
+      const f = clamp(s.life / 0.9, 0, 1);
+      ctx.strokeStyle = 'rgba(220,235,255,' + (f * 0.85).toFixed(3) + ')';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(s.x - s.vx * 0.12, s.y - s.vy * 0.12);
+      ctx.stroke();
+    }
     for (const st of stars) {
       const sx = ((st.x - G.cam.x * st.z) % (vw + 100) + vw + 100) % (vw + 100) - 50;
       const sy = ((st.y - G.cam.y * st.z) % (vh + 100) + vh + 100) % (vh + 100) - 50;
