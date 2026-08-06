@@ -323,6 +323,8 @@ const SIM = require(path.join(ROOT, 'sim.js'));
 // ============================================================ 3) server test
 (async () => {
   const PORT = 8667;
+  // fresh pilot database so elo assertions are deterministic
+  try { fs.rmSync(path.join(ROOT, 'data'), { recursive: true, force: true }); } catch (e) { }
   const srv = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
     env: Object.assign({}, process.env, { PORT: String(PORT), BOTS: '4' }),
     stdio: ['ignore', 'pipe', 'pipe'],

@@ -1033,9 +1033,15 @@
   }
 
   // ---------------------------------------------------------------- ship art
-  // Ships are solid, metallic, shaded craft lit from the screen's top-left,
-  // rendered through a 36-frame rotation atlas for a crisp baked-sprite feel.
+  // Realistically lit sprites, baked entirely in code: every rotation frame
+  // renders a HEIGHTMAP (rounded fuselage, raised deck, cockpit dome,
+  // recessed nozzles, seam grooves) and an ALBEDO map (grey hull metal with
+  // panel tonal variation, team-color stripes, glass, nav lights), then a
+  // per-pixel pass derives surface normals from the heights and applies
+  // directional lighting — diffuse + specular + rim + dark silhouette edge.
+  // The result reads like pre-rendered 3D models, with zero image assets.
   const ROT_FRAMES = 36;
+  const atlasCache = new Map();
 
   function tracePolyOn(g, pts, r) {
     g.beginPath();
@@ -1052,50 +1058,48 @@
     const [cx, cy] = centroid(pts);
     return pts.map(p => [cx + (p[0] - cx) * k, cy + (p[1] - cy) * k]);
   }
-  // draw a fully shaded ship at any size; `lightA` is the light direction
-  // in LOCAL ship space (pass -shipAngle - 3π/4 for fixed top-left world light)
-  function drawShipGeometry(g, t, hue, r, lightA) {
-    const lx = Math.cos(lightA), ly = Math.sin(lightA);
-    const metal = (sat, lo, hi) => {
-      const grad = g.createLinearGradient(lx * r, ly * r, -lx * r, -ly * r);
-      grad.addColorStop(0, 'hsl(' + hue + ',' + sat + '%,' + hi + '%)');
-      grad.addColorStop(0.55, 'hsl(' + hue + ',' + sat + '%,' + ((hi + lo) / 2 | 0) + '%)');
-      grad.addColorStop(1, 'hsl(' + hue + ',' + sat + '%,' + lo + '%)');
-      return grad;
-    };
-    // drop shadow pass — grounds the sprite like the originals
+  function strHash(s) {
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return h >>> 0;
+  }
+  const gray = v => {
+    const c = Math.max(0, Math.min(255, Math.round(v * 255)));
+    return 'rgb(' + c + ',' + c + ',' + c + ')';
+  };
+
+  function paintHeight(g, t, r, ang, cs) {
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, cs, cs);
     g.save();
-    g.translate(r * 0.08, r * 0.11);
+    g.translate(cs / 2, cs / 2);
+    g.rotate(ang);
+    const cx = t.cockpit ? t.cockpit[0] * r * 0.5 : 0;
+    g.globalCompositeOperation = 'lighten';
+    // fuselage volume: tallest near the cockpit, sloping to thin wing edges
     tracePolyOn(g, t.shape, r);
-    g.fillStyle = 'rgba(0,0,5,0.35)';
+    const fg = g.createRadialGradient(cx, 0, r * 0.1, cx, 0, r * 1.35);
+    fg.addColorStop(0, gray(0.58));
+    fg.addColorStop(1, gray(0.28));
+    g.fillStyle = fg;
     g.fill();
-    g.restore();
-    // hull
-    tracePolyOn(g, t.shape, r);
-    g.fillStyle = metal(38, 22, 62);
-    g.fill();
-    g.lineWidth = Math.max(1, r * 0.07);
-    g.strokeStyle = 'rgba(6,9,18,0.8)';
-    g.stroke();
-    // raised plate deck
+    // raised deck
     tracePolyOn(g, insetPoly(t.shape, 0.62), r);
-    g.fillStyle = metal(45, 32, 74);
+    const dg = g.createRadialGradient(cx, 0, r * 0.08, cx, 0, r);
+    dg.addColorStop(0, gray(0.75));
+    dg.addColorStop(1, gray(0.5));
+    g.fillStyle = dg;
     g.fill();
-    g.lineWidth = 1;
-    g.strokeStyle = 'rgba(8,12,22,0.45)';
-    g.stroke();
-    // team-color accent
     if (t.accent) {
       tracePolyOn(g, t.accent, r);
-      g.fillStyle = metal(92, 46, 70);
+      g.fillStyle = gray(0.82);
       g.fill();
-      g.strokeStyle = 'rgba(8,12,22,0.45)';
-      g.stroke();
     }
-    // panel seams
+    g.globalCompositeOperation = 'source-over';
+    // seam grooves carve into the hull so they catch the light
     if (t.deco) {
-      g.strokeStyle = 'rgba(8,12,24,0.65)';
-      g.lineWidth = Math.max(1, r * 0.06);
+      g.strokeStyle = gray(0.32);
+      g.lineWidth = Math.max(1.5, r * 0.05);
       g.beginPath();
       for (const line of t.deco) {
         g.moveTo(line[0][0] * r, line[0][1] * r);
@@ -1103,59 +1107,172 @@
       }
       g.stroke();
     }
-    // engine nozzles
+    // cockpit dome
+    if (t.cockpit) {
+      const [px, py, rx, ry] = t.cockpit;
+      const cg = g.createRadialGradient(px * r, py * r, 0.5, px * r, py * r, Math.max(rx, ry) * r * 1.3);
+      cg.addColorStop(0, gray(0.98));
+      cg.addColorStop(1, gray(0.62));
+      g.fillStyle = cg;
+      g.beginPath();
+      g.ellipse(px * r, py * r, rx * r, ry * r, 0, 0, TAU);
+      g.fill();
+    }
+    // recessed engine nozzles
     for (const en of t.engines) {
       g.beginPath();
       g.arc(en[0] * r, en[1] * r, r * 0.16, 0, TAU);
-      g.fillStyle = 'hsl(' + hue + ',20%,10%)';
+      g.fillStyle = gray(0.14);
       g.fill();
-      g.strokeStyle = 'rgba(8,12,22,0.7)';
-      g.lineWidth = 1;
-      g.stroke();
     }
-    // cockpit glass with specular glint toward the light
-    if (t.cockpit) {
-      const [cx, cy, crx, cry] = t.cockpit;
-      const gx = cx * r + lx * crx * r * 0.45, gy = cy * r + ly * cry * r * 0.45;
-      const cg = g.createRadialGradient(gx, gy, 0.5, cx * r, cy * r, crx * r * 1.5);
-      cg.addColorStop(0, 'rgba(235,248,255,0.95)');
-      cg.addColorStop(0.45, 'rgba(120,185,240,0.85)');
-      cg.addColorStop(1, 'rgba(20,45,95,0.9)');
-      g.fillStyle = cg;
-      g.beginPath();
-      g.ellipse(cx * r, cy * r, crx * r, cry * r, 0, 0, TAU);
-      g.fill();
-      g.strokeStyle = 'rgba(8,12,22,0.7)';
-      g.lineWidth = 1;
-      g.stroke();
-    }
+    g.restore();
   }
 
-  // 36-frame rotation atlas per (type,hue), world light fixed at top-left
-  const atlasCache = new Map();
-  const LIGHT_WORLD = -3 * Math.PI / 4; // from top-left of the screen
-  function shipAtlas(typeKey, hue) {
-    const key = typeKey + ':' + Math.round(hue);
-    let a = atlasCache.get(key);
-    if (a) return a;
+  function paintAlbedo(g, t, hue, r, ang, cs) {
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, cs, cs);
+    g.save();
+    g.translate(cs / 2, cs / 2);
+    g.rotate(ang);
+    // hull: desaturated metal with a whisper of the team hue
+    tracePolyOn(g, t.shape, r);
+    g.fillStyle = 'hsl(' + hue + ',16%,60%)';
+    g.fill();
+    // deterministic panel plating — same panels every frame and hue
+    g.save();
+    tracePolyOn(g, t.shape, r);
+    g.clip();
+    const rng = SIM.mulberry32(strHash(t.label));
+    for (let i = 0; i < 7; i++) {
+      const px = (rng() * 2 - 1) * r, py = (rng() * 2 - 1) * r;
+      const pw = (0.3 + rng() * 0.7) * r, ph = (0.2 + rng() * 0.5) * r;
+      g.fillStyle = 'hsla(' + hue + ',14%,' + (54 + rng() * 12) + '%,0.85)';
+      g.fillRect(px, py, pw, ph);
+    }
+    g.restore();
+    // deck + accent
+    tracePolyOn(g, insetPoly(t.shape, 0.62), r);
+    g.fillStyle = 'hsla(' + hue + ',12%,66%,0.95)';
+    g.fill();
+    if (t.accent) {
+      tracePolyOn(g, t.accent, r);
+      g.fillStyle = 'hsl(' + hue + ',75%,48%)';
+      g.fill();
+    }
+    // seams
+    if (t.deco) {
+      g.strokeStyle = 'rgba(18,22,32,0.85)';
+      g.lineWidth = Math.max(1.5, r * 0.05);
+      g.beginPath();
+      for (const line of t.deco) {
+        g.moveTo(line[0][0] * r, line[0][1] * r);
+        for (let i = 1; i < line.length; i++) g.lineTo(line[i][0] * r, line[i][1] * r);
+      }
+      g.stroke();
+    }
+    // cockpit glass (the lighting pass turns the dome into a glint)
+    if (t.cockpit) {
+      const [px, py, rx, ry] = t.cockpit;
+      g.fillStyle = '#16304e';
+      g.beginPath();
+      g.ellipse(px * r, py * r, rx * r, ry * r, 0, 0, TAU);
+      g.fill();
+    }
+    // nozzles
+    for (const en of t.engines) {
+      g.beginPath();
+      g.arc(en[0] * r, en[1] * r, r * 0.16, 0, TAU);
+      g.fillStyle = '#14161c';
+      g.fill();
+    }
+    // nav lights: port red, starboard green
+    let maxY = t.shape[0], minY = t.shape[0];
+    for (const p of t.shape) { if (p[1] > maxY[1]) maxY = p; if (p[1] < minY[1]) minY = p; }
+    g.fillStyle = '#ff5348';
+    g.beginPath(); g.arc(minY[0] * r * 0.94, minY[1] * r * 0.94, Math.max(1, r * 0.05), 0, TAU); g.fill();
+    g.fillStyle = '#4dff7a';
+    g.beginPath(); g.arc(maxY[0] * r * 0.94, maxY[1] * r * 0.94, Math.max(1, r * 0.05), 0, TAU); g.fill();
+    g.restore();
+  }
+
+  // fixed screen-space light from the top-left, slightly overhead
+  const LX = -0.55, LY = -0.55, LZ = 0.628;
+  const HLEN = Math.hypot(LX, LY, LZ + 1);
+  const HX = LX / HLEN, HY = LY / HLEN, HZ = (LZ + 1) / HLEN;
+  function lightCompose(fctx, hImg, aImg, cs) {
+    const out = fctx.createImageData(cs, cs);
+    const hd = hImg.data, ad = aImg.data, od = out.data;
+    const HS = 3.1;
+    for (let y = 1; y < cs - 1; y++) {
+      for (let x = 1; x < cs - 1; x++) {
+        const i = (y * cs + x) * 4;
+        const a = ad[i + 3];
+        if (!a) continue;
+        // silhouette edge: crisp dark outline
+        if (!ad[i - 1] || !ad[i + 7] || !ad[i - cs * 4 + 3] || !ad[i + cs * 4 + 3]) {
+          od[i] = 8; od[i + 1] = 10; od[i + 2] = 16; od[i + 3] = a;
+          continue;
+        }
+        let nx = (hd[i - 4] - hd[i + 4]) / 255 * HS;
+        let ny = (hd[i - cs * 4] - hd[i + cs * 4]) / 255 * HS;
+        const inv = 1 / Math.sqrt(nx * nx + ny * ny + 1);
+        nx *= inv; ny *= inv;
+        const nz = inv;
+        let diff = nx * LX + ny * LY + nz * LZ;
+        if (diff < 0) diff = 0;
+        let spec = nx * HX + ny * HY + nz * HZ;
+        spec = spec < 0 ? 0 : Math.pow(spec, 26) * 160;
+        const rim = Math.pow(1 - nz, 1.6) * 70;
+        const lum = 0.33 + 0.85 * diff;
+        od[i] = Math.min(255, ad[i] * lum + spec + rim * 0.35);
+        od[i + 1] = Math.min(255, ad[i + 1] * lum + spec + rim * 0.6);
+        od[i + 2] = Math.min(255, ad[i + 2] * lum + spec * 1.06 + rim);
+        od[i + 3] = a;
+      }
+    }
+    fctx.putImageData(out, 0, 0);
+  }
+
+  function shipAtlas(typeKey, hue, scaleMul) {
+    scaleMul = scaleMul || 1;
+    const key = typeKey + ':' + Math.round(hue) + ':' + scaleMul;
+    let cached = atlasCache.get(key);
+    if (cached) return cached;
     const t = SHIP_TYPES[typeKey];
-    const r = t.radius * 1.35;
-    const cell = Math.ceil(r * 2 * 1.35) + 10;
+    const r0 = t.radius * 1.35 * scaleMul;
+    const cell = Math.ceil(r0 * 2 * 1.4) + 12;
+    const SS = 2;                       // supersample, downscaled into the atlas
+    const cs = cell * SS;
+    const r = r0 * SS;
     const doc = GLOBAL.document;
-    const c = doc.createElement('canvas');
-    c.width = cell * ROT_FRAMES; c.height = cell;
-    const g = c.getContext('2d');
+    const mk = () => { const c = doc.createElement('canvas'); c.width = c.height = cs; return c; };
+    const hC = mk(), aC = mk(), fC = mk(), sC = mk();
+    const hctx = hC.getContext('2d'), actx2 = aC.getContext('2d');
+    const fctx = fC.getContext('2d'), sctx = sC.getContext('2d');
+    const atlas = doc.createElement('canvas');
+    atlas.width = cell * ROT_FRAMES; atlas.height = cell;
+    const g = atlas.getContext('2d');
     for (let f = 0; f < ROT_FRAMES; f++) {
       const ang = f / ROT_FRAMES * TAU;
-      g.save();
-      g.translate(f * cell + cell / 2, cell / 2);
-      g.rotate(ang);
-      drawShipGeometry(g, t, hue, r, LIGHT_WORLD - ang);
-      g.restore();
+      paintHeight(hctx, t, r, ang, cs);
+      // soften the heightmap so edges become bevels for the normal pass
+      try {
+        sctx.setTransform(1, 0, 0, 1, 0, 0);
+        sctx.clearRect(0, 0, cs, cs);
+        sctx.drawImage(hC, 0, 0);
+        hctx.setTransform(1, 0, 0, 1, 0, 0);
+        hctx.clearRect(0, 0, cs, cs);
+        hctx.filter = 'blur(' + Math.max(1, SS) + 'px)';
+        hctx.drawImage(sC, 0, 0);
+        hctx.filter = 'none';
+      } catch (e) { }
+      paintAlbedo(actx2, t, hue, r, ang, cs);
+      lightCompose(fctx, hctx.getImageData(0, 0, cs, cs), actx2.getImageData(0, 0, cs, cs), cs);
+      g.drawImage(fC, 0, 0, cs, cs, f * cell, 0, cell, cell);
     }
-    a = { c, cell };
-    atlasCache.set(key, a);
-    return a;
+    cached = { c: atlas, cell };
+    atlasCache.set(key, cached);
+    return cached;
   }
 
   function drawShip(s) {
@@ -1183,6 +1300,11 @@
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(s.x, s.y);
+    // faint team-color halo so ships read against the void (kept subtle —
+    // the sprite's own lighting carries the look now)
+    ctx.globalCompositeOperation = 'lighter';
+    drawGlow(0, 0, 50, s.hue, stealthy ? 0.06 : 0.14);
+    ctx.globalCompositeOperation = 'source-over';
 
     // engine flames under the hull, aligned to the quantized frame
     const th = s.remote ? s.netTh : (s.ctl.thrust > 0 || s.rocketT > 0 ? 1 : 0);
@@ -1669,12 +1791,13 @@
       ctx.globalAlpha = focus ? 1 : 0.35;
       if (focus) {
         ctx.globalCompositeOperation = 'lighter';
-        drawGlow(0, 0, 190, t.hue, 0.25);
+        drawGlow(0, 0, 190, t.hue, 0.18);
         ctx.globalCompositeOperation = 'source-over';
       }
       const ang = focus ? G.time * 0.9 : -0.5;
-      ctx.rotate(ang);
-      drawShipGeometry(ctx, t, t.hue, t.radius * scale, LIGHT_WORLD - ang);
+      const at = shipAtlas(SHIP_ORDER[i], t.hue, focus ? 2.8 : 1.4);
+      const fr = ((Math.round(ang / TAU * ROT_FRAMES) % ROT_FRAMES) + ROT_FRAMES) % ROT_FRAMES;
+      ctx.drawImage(at.c, fr * at.cell, 0, at.cell, at.cell, -at.cell / 2, -at.cell / 2, at.cell, at.cell);
       ctx.restore();
     }
 
