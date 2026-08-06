@@ -766,14 +766,17 @@
       h = (h ^ (h >> 13)) * 1274126177 | 0;
       return ((h ^ (h >> 16)) >>> 0) / 4294967296;
     };
-    // outer glow bleed: the collidable layer announces itself against space
+    // outer glow bleed: the collidable layer announces itself against space.
+    // ONE path + ONE shadowed fill — per-tile shadow fills hang Firefox.
     c.save();
     c.shadowColor = 'rgba(90,145,255,0.55)';
     c.shadowBlur = 11;
     c.fillStyle = '#161e34';
+    c.beginPath();
     for (let ty = 0; ty < MAPS; ty++)
       for (let tx = 0; tx < MAPS; tx++)
-        if (SIM.tileSolid(W, tx, ty)) c.fillRect(tx * TILE, ty * TILE, TILE, TILE);
+        if (SIM.tileSolid(W, tx, ty)) c.rect(tx * TILE, ty * TILE, TILE, TILE);
+    c.fill();
     c.restore();
     for (let ty = 0; ty < MAPS; ty++) {
       for (let tx = 0; tx < MAPS; tx++) {
@@ -1848,16 +1851,17 @@
 
   function applyBloom() {
     if (!bloomC) return;
+    // pure downscale->upscale bloom: bilinear filtering supplies the soft
+    // spread. No per-frame ctx.filter blur — that path is CPU-rasterized
+    // and tanks the framerate on Firefox.
     const bw = bloomC.width, bh = bloomC.height;
     bloomCtx.clearRect(0, 0, bw, bh);
     bloomCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, bw, bh);
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = 0.22;
-    if (filterOK) ctx.filter = 'blur(5px)';
+    ctx.globalAlpha = 0.24;
     ctx.drawImage(bloomC, 0, 0, bw, bh, 0, 0, vw, vh);
     ctx.restore();
-    if (filterOK) ctx.filter = 'none';
   }
 
   // ---------------------------------------------------------------- HUD
@@ -2376,7 +2380,8 @@
   function onKeyDown(e) {
     audioInit();
     if (SFX.ctx && SFX.ctx.state === 'suspended') SFX.ctx.resume();
-    const code = e.code;
+    // normalize: any key that MEANS an arrow acts as that arrow everywhere
+    const code = e.key && e.key.startsWith('Arrow') ? e.key : e.code;
 
     // chat capture first
     if (G.chatOpen) {
@@ -2409,9 +2414,13 @@
       return;
     }
 
-    if (HANDLED.has(code)) e.preventDefault();
-    if (keys[code]) return;
+    if (HANDLED.has(code) || (e.key && e.key.startsWith('Arrow'))) e.preventDefault();
+    const held = !!keys[code];
     keys[code] = true;
+    // also register by key name — numpad arrows (NumLock off) report
+    // code "Numpad4" but key "ArrowLeft", and must still steer
+    if (e.key && e.key.length > 1) keys[e.key] = true;
+    if (held) return;
 
     if (code === 'KeyM') { G.muted = !G.muted; say(G.muted ? 'Sound muted' : 'Sound on', '#8df'); return; }
     if (code === 'KeyN') {
@@ -2478,7 +2487,13 @@
       }
     }
   }
-  function onKeyUp(e) { keys[e.code] = false; }
+  function onKeyUp(e) {
+    keys[e.code] = false;
+    if (e.key && e.key.length > 1) keys[e.key] = false;
+  }
+  function releaseAllKeys() {
+    for (const k in keys) keys[k] = false;
+  }
 
   // ---------------------------------------------------------------- boot
   function resize() {
@@ -2524,7 +2539,10 @@
     GLOBAL.addEventListener('resize', resize);
     GLOBAL.addEventListener('keydown', onKeyDown);
     GLOBAL.addEventListener('keyup', onKeyUp);
-    GLOBAL.addEventListener('blur', () => { if (G.state === 'play' && !G.online) G.paused = true; });
+    GLOBAL.addEventListener('blur', () => {
+      releaseAllKeys();   // no stuck thrusters after alt-tab
+      if (G.state === 'play' && !G.online) G.paused = true;
+    });
     canvas.addEventListener('mousedown', () => {
       audioInit();
       if (SFX.ctx && SFX.ctx.state === 'suspended') SFX.ctx.resume();
