@@ -1483,7 +1483,7 @@
     on: true, step: 0, nextT: 0,
     heat: 0, pulse: 0,                      // live intensity + event spikes
     sec: 'calm', secBar: 0, secLen: 4, bar: 0, prog: 0,
-    started: false, dropImpact: false,
+    started: false, dropImpact: false, glue: null,
   };
   const MUS_BPM = 126, MUS_STEP = 60 / MUS_BPM / 4; // 16th notes
   // three A-minor progressions, rotated on each new build
@@ -1517,20 +1517,53 @@
     if (!MUS.started) { MUS.started = true; return; }
     MUS.bar++; MUS.secBar++;
     const h = MUS.heat;
-    if ((MUS.sec === 'calm' || MUS.sec === 'break') && h > 0.55 && MUS.secBar >= 2) {
-      musSetSec('build', 8); return;
+    // hysteresis: entering the climb takes more heat (0.35) than staying in
+    // the fight (0.25), so a hovering heat value can't flap sections
+    if ((MUS.sec === 'calm' || MUS.sec === 'break') && h > 0.6 && MUS.secBar >= 2) {
+      musSetSec('build', 8); return;   // ambush: cut the quiet straight into the climb
     }
     if (MUS.secBar < MUS.secLen) return;
-    if (MUS.sec === 'calm') musSetSec(h > 0.3 ? 'build' : 'calm', h > 0.3 ? 8 : 4);
+    if (MUS.sec === 'calm') musSetSec(h > 0.35 ? 'build' : 'calm', h > 0.35 ? 8 : 4);
     else if (MUS.sec === 'build') { musSetSec('drop', 8); MUS.dropImpact = true; }
     else if (MUS.sec === 'drop') {
-      if (h > 0.3 && MUS.secLen < 32) MUS.secLen += 8;   // the fight rages on
+      if (h > 0.25 && MUS.secLen < 32) MUS.secLen += 8;   // the fight rages on
       else musSetSec('break', 8);
-    } else musSetSec(h > 0.3 ? 'build' : 'calm', h > 0.3 ? 8 : 4);
+    } else musSetSec(h > 0.35 ? 'build' : 'calm', h > 0.35 ? 8 : 4);
   }
   function musSetSec(n, len) {
     if (n === 'build') MUS.prog = (MUS.prog + 1) % MUS_PROGS.length;  // fresh harmony each ride up
+    // remember the seam so the scheduler can glue it: sections never just
+    // cut over — a swell leads into the build, a wash lets the drop exhale
+    if (n !== MUS.sec) MUS.glue = { from: MUS.sec, to: n };
     MUS.sec = n; MUS.secBar = 0; MUS.secLen = len;
+  }
+  function musSwell(t) {
+    // rising noise pickup INTO a downbeat — masks a gear change
+    const a = SFX.ctx;
+    const s0 = Math.max(a.currentTime + 0.02, t - 0.55);
+    const src = a.createBufferSource(); src.buffer = SFX.noise; src.loop = true;
+    const f = a.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 1;
+    f.frequency.setValueAtTime(500, s0);
+    f.frequency.exponentialRampToValueAtTime(5200, t);
+    const g = a.createGain();
+    g.gain.setValueAtTime(0.0001, s0);
+    g.gain.linearRampToValueAtTime(0.09, t);
+    g.gain.linearRampToValueAtTime(0.0001, t + 0.06);
+    src.connect(f); f.connect(g); g.connect(SFX.musBus);
+    src.start(s0); src.stop(t + 0.1);
+  }
+  function musWash(t, dur) {
+    // falling filtered tail — the drop exhaling into the breakdown
+    const a = SFX.ctx;
+    const src = a.createBufferSource(); src.buffer = SFX.noise; src.loop = true;
+    const f = a.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 0.9;
+    f.frequency.setValueAtTime(5600, t);
+    f.frequency.exponentialRampToValueAtTime(280, t + dur);
+    const g = a.createGain();
+    g.gain.setValueAtTime(0.08, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f); f.connect(g); g.connect(SFX.musBus);
+    src.start(t); src.stop(t + dur + 0.05);
   }
 
   function musicInit() {
@@ -1573,10 +1606,13 @@
     o.start(t); o.stop(t + dur + 0.05);
   }
   function musPad(t, chord, dur) {
+    // pads hold FULL level to the end of their window and release 1.4s
+    // INTO the next pad's attack — consecutive pads crossfade instead of
+    // dipping to silence at every boundary
     const a = SFX.ctx;
-    const atk = Math.min(1.2, dur * 0.3), rel = Math.min(1.6, dur * 0.35);
-    // deep root drone
-    musNote(t, midiF(chord[0] - 24), dur, 0.09, 'sine', 0, false);
+    const atk = Math.min(1.0, dur * 0.25), rel = 1.4;
+    // deep root drone, same overlap
+    musNote(t, midiF(chord[0] - 24), dur + 1.0, 0.09, 'sine', 0, false);
     // two detuned saws per chord tone, slow bloom
     for (const m of chord.slice(0, 3)) {
       for (const det of [0.9965, 1.0035]) {
@@ -1590,10 +1626,10 @@
         const g = a.createGain();
         g.gain.setValueAtTime(0.0001, t);
         g.gain.linearRampToValueAtTime(0.035, t + atk);
-        g.gain.setValueAtTime(0.035, t + dur - rel);
-        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        g.gain.setValueAtTime(0.035, t + dur);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur + rel);
         o.connect(f); f.connect(g); g.connect(SFX.musBus);
-        o.start(t); o.stop(t + dur + 0.1);
+        o.start(t); o.stop(t + dur + rel + 0.1);
       }
     }
   }
@@ -1842,6 +1878,13 @@
     const hook = MUS_HOOK[hp];
     const swung = t + MUS_STEP * 0.12;          // light swing on odd-16th ticks
 
+    // seam glue: the first step of a fresh section gets its transition FX
+    if (s16 === 0 && MUS.glue) {
+      const gl = MUS.glue; MUS.glue = null;
+      if (gl.to === 'build') musSwell(t);
+      else if (gl.to === 'break') { musCrash(t); musWash(t, 32 * MUS_STEP); }
+    }
+
     if (sec === 'calm' || sec === 'break') {
       // weightless: pads, sub pulse, echoing arp — the breakdown keeps a
       // heartbeat kick so the floor never quite stops
@@ -1927,8 +1970,11 @@
     if (!SFX.ctx || !MUS.on || G.muted || SFX.ctx.state !== 'running') return;
     musicInit();
     const now = SFX.ctx.currentTime;
-    if (MUS.nextT < now - 0.5) MUS.nextT = now + 0.06;  // resync after tab sleep
-    const ahead = now + 0.35;
+    if (MUS.nextT < now - 0.3) MUS.nextT = now + 0.05;  // resync after tab sleep
+    // a deep 1.2s lookahead: a stalled main thread (heavy frame, chunk
+    // bake, throttled tab at 1Hz timers) must never starve the audio
+    // queue — dropouts read as "the music cuts in and out"
+    const ahead = now + 1.2;
     while (MUS.nextT < ahead) {
       musScheduleStep(MUS.step, MUS.nextT);
       MUS.step++;
@@ -4548,6 +4594,12 @@
     canvas.addEventListener('touchcancel', onTouchEnd, { passive: false });
     // keepalive so the server doesn't drop us when the tab is throttled
     setInterval(() => { if (G.online) netSend({ t: 'ka' }); }, 5000);
+    // audio context can suspend on tab switch / phone lock — resume it the
+    // moment we're visible again so the music doesn't stay dead
+    const wake = () => { if (SFX.ctx && SFX.ctx.state === 'suspended') { try { SFX.ctx.resume(); } catch (e) { } } };
+    GLOBAL.addEventListener('focus', wake);
+    if (GLOBAL.document && GLOBAL.document.addEventListener)
+      GLOBAL.document.addEventListener('visibilitychange', wake);
     // music sequencer lookahead (starts producing sound once audio unlocks)
     try { MUS.on = GLOBAL.localStorage.getItem('interstellar-music') !== '0'; } catch (e) { }
     setInterval(musicTick, 100);
@@ -4561,7 +4613,7 @@
     if (!SFX.ctx) return 'no audio ctx';
     musicInit();
     const save = SFX.musBus.gain.value;
-    const st = { step: MUS.step, heat: MUS.heat, pulse: MUS.pulse, sec: MUS.sec, secBar: MUS.secBar, secLen: MUS.secLen, bar: MUS.bar, prog: MUS.prog, started: MUS.started, dropImpact: MUS.dropImpact };
+    const st = { step: MUS.step, heat: MUS.heat, pulse: MUS.pulse, sec: MUS.sec, secBar: MUS.secBar, secLen: MUS.secLen, bar: MUS.bar, prog: MUS.prog, started: MUS.started, dropImpact: MUS.dropImpact, glue: MUS.glue };
     SFX.musBus.gain.value = 0;
     const t0 = SFX.ctx.currentTime + 0.1;
     const N = 64 * 16 * 3, visited = new Set();
