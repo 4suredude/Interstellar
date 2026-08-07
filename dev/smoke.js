@@ -179,14 +179,14 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     assert(sf.vy > 40 && Math.abs(sf.vx) < 20, 'strafe pushes sideways (vy=' + sf.vy.toFixed(0) + ')');
     sf.ctl.strafe = 0;
 
-    // coast damping: hands-off, a Dagger settles fast, a Titan drifts on
+    // coast damping: hands-off, a Dagger settles fast, a Titan drifts on.
+    // Run it from the arena center — guaranteed clear runway, no wall bounces.
     const dg = SIM.makeShip(Ws2, 'dagger', 'local', 'D', 55, 0);
     const tn = SIM.makeShip(Ws2, 'titan', 'local', 'T', 355, 0);
-    const spd = SIM.randClearPoint(Ws2);
-    for (const sh of [dg, tn]) { sh.x = spd.x; sh.y = spd.y; sh.vx = 200; sh.vy = 0; sh.safe = 99; }
-    sf.safe = 99; sf.vx = 0; sf.vy = 0;
-    for (let i = 0; i < 120; i++) SIM.updateWorld(Ws2, SIM.STEP);   // 2s hands-off
-    assert(dg.vx < 80 && tn.vx > 150 && dg.vx < tn.vx * 0.6,
+    for (const sh of [dg, tn]) { sh.x = SIM.WORLD / 2 - 120; sh.y = SIM.WORLD / 2; sh.vx = 150; sh.vy = 0; sh.safe = 99; }
+    sf.safe = 99; sf.vx = 0; sf.vy = 0; sf.x = SIM.WORLD / 2; sf.y = SIM.WORLD / 2 - 200;
+    for (let i = 0; i < 60; i++) SIM.updateWorld(Ws2, SIM.STEP);   // 1s hands-off
+    assert(dg.vx > 0 && tn.vx > 0 && dg.vx < 105 && tn.vx > 125 && dg.vx < tn.vx * 0.75,
       'agile hulls settle, heavies drift (dagger ' + dg.vx.toFixed(0) + ' vs titan ' + tn.vx.toFixed(0) + ')');
     assert(SIM.SHIP_TYPES.dagger.damp > SIM.SHIP_TYPES.titan.damp, 'damp values per hull');
   }

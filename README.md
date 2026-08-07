@@ -62,6 +62,9 @@ as humans join and rejoin as the zone empties.
 ## Play solo (no install)
 
 Open `index.html` in any modern browser, pick a mode and a ship, and fly.
+Works on **phones and tablets** too: a virtual stick appears under your left
+thumb (point it where you want to fly), weapon buttons sit under your right,
+and every menu is tappable — the hosted zone is fully playable from mobile.
 
 ## Play online (multiplayer)
 
@@ -193,4 +196,5 @@ node dev/smoke.js         # run all three test layers
 - Flag capture and ball-game modes
 - Squad tags and squad-vs-squad ladders
 - Account authentication (callsigns are currently honor-system identity)
-- Gamepad and touch controls
+- Gamepad support (touch controls shipped: virtual stick + weapon buttons,
+  tappable menus, phone-compact HUD)

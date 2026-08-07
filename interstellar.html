@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
 <title>Interstellar — top-down space combat</title>
 <style>
-  html,body{margin:0;padding:0;height:100%;background:#04060d;overflow:hidden}
-  canvas{display:block;width:100vw;height:100vh;cursor:crosshair}
+  html,body{margin:0;padding:0;height:100%;background:#04060d;overflow:hidden;
+    -webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+  canvas{display:block;width:100vw;height:100vh;cursor:crosshair;touch-action:none}
   #err{position:fixed;top:12px;left:12px;right:12px;z-index:9;display:none;
     color:#ffb0a8;background:#1c0a0a;border:1px solid #a04438;border-radius:8px;
     padding:14px 18px;font:13px/1.5 monospace;white-space:pre-wrap}
@@ -1183,6 +1184,176 @@
   const keys = Object.create(null);
   let canvas = null, ctx = null, vw = 1280, vh = 720, dpr = 1;
   let vignette = null, bloomC = null, bloomCtx = null, filterOK = false;
+
+  // ---------------------------------------------------------------- touch
+  // Mobile is a first-class pilot seat: virtual stick (point-to-fly) on the
+  // left, weapon buttons on the right, tappable menus everywhere.
+  const T = {
+    capable: ('ontouchstart' in GLOBAL) || (GLOBAL.navigator && GLOBAL.navigator.maxTouchPoints > 0),
+    active: false,          // flips true on first real touch
+    stick: null,            // {id, x0, y0, dx, dy}
+    fire: false, bomb: false,
+    btns: [],               // laid out each frame
+    ui: {},                 // tappable rects published by the draw pass
+  };
+  function layoutTouchButtons() {
+    const p = G.player;
+    const sc = Math.min(1, vw / 900) * (vw < 500 ? 0.85 : 1);
+    const R = 44 * sc, r2 = 30 * sc;
+    T.btns = [
+      { key: 'fire', label: 'FIRE', x: vw - 74 * sc, y: vh - 86 * sc, r: R, hold: true },
+      { key: 'bomb', label: 'BOMB', x: vw - 168 * sc, y: vh - 150 * sc, r: 34 * sc, hold: true },
+      { key: 'repel', label: 'REP' + (p ? ' ' + p.repels : ''), x: vw - 62 * sc, y: vh - 196 * sc, r: r2 },
+      { key: 'burst', label: 'BST' + (p ? ' ' + p.bursts : ''), x: vw - 178 * sc, y: vh - 62 * sc, r: r2 },
+      {
+        key: 'spec',
+        label: p && p.t.blink ? 'BLNK' : 'RKT' + (p ? ' ' + p.rockets : ''),
+        x: vw - 258 * sc, y: vh - 96 * sc, r: 27 * sc,
+      },
+      { key: 'pause', label: 'II', x: vw - 24, y: 64, r: 16 },
+    ];
+    if (G.online) T.btns.push({ key: 'chat', label: 'CHAT', x: 30, y: vh * 0.4, r: 24 * sc });
+    if (G.player && !G.player.t.blink && G.player.team &&
+        G.W.ships.some(s => s !== G.player && !s.dead && s.team === G.player.team && s.type === 'comet')) {
+      T.btns.push({ key: 'warp', label: 'WARP', x: vw - 258 * sc, y: vh - 170 * sc, r: 25 * sc });
+    }
+  }
+  function touchPos(t) {
+    const r = canvas.getBoundingClientRect();
+    return { x: t.clientX - r.left, y: t.clientY - r.top };
+  }
+  function pressTouchButton(key) {
+    const p = G.player;
+    if (key === 'pause') { G.paused = !G.paused; return; }
+    if (key === 'chat') { mobileChat(); return; }
+    if (!p || p.dead || G.paused) return;
+    if (key === 'fire') T.fire = true;
+    else if (key === 'bomb') T.bomb = true;
+    else if (key === 'repel') SIM.doRepel(G.W, p);
+    else if (key === 'burst') SIM.doBurst(G.W, p);
+    else if (key === 'spec') { if (p.t.blink) SIM.doBlink(G.W, p); else SIM.fireRocket(G.W, p); }
+    else if (key === 'warp') SIM.warpToBeacon(G.W, p);
+  }
+  function mobileChat() {
+    let text = '';
+    try { text = GLOBAL.prompt('say (// team · /duel <name> · /stats):') || ''; } catch (e) { }
+    text = text.trim();
+    if (!text) return;
+    const tc = text.startsWith('//') ? 1 : 0;
+    if (tc) text = text.slice(2).trim();
+    if (!text) return;
+    netSend({ t: 'chat', text: text.slice(0, 120), tc });
+    if (!text.startsWith('/')) say((tc ? 'T· ' : '') + G.name + '> ' + text, tc ? '#8fd4a8' : '#cfe');
+  }
+  function handleTap(p) {
+    const ui = T.ui;
+    const inRect = r => r && p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+    if (G.state === 'title') {
+      if (ui.modes) for (const m of ui.modes) {
+        if (inRect(m)) {
+          if (m.mode === 'online') { G.nameStr = G.nameStr || loadName(); fetchZoneStatus(); G.state = 'nameentry'; ensureNameInput(); }
+          else { G.online = false; G.pendingMode = m.mode; G.state = 'select'; }
+          return;
+        }
+      }
+    } else if (G.state === 'select') {
+      if (inRect(ui.prev)) { G.sel = (G.sel + SHIP_ORDER.length - 1) % SHIP_ORDER.length; return; }
+      if (inRect(ui.next)) { G.sel = (G.sel + 1) % SHIP_ORDER.length; return; }
+      if (inRect(ui.launch)) {
+        if (G.online) launchOnline(SHIP_ORDER[G.sel]); else startSolo(SHIP_ORDER[G.sel]);
+        return;
+      }
+      if (inRect(ui.back)) { if (G.net) { try { G.net.close(); } catch (e) { } G.net = null; G.online = false; } G.state = 'title'; }
+    } else if (G.state === 'nameentry') {
+      if (inRect(ui.nameBox)) { ensureNameInput(); if (nameInput) nameInput.focus(); return; }
+      if (inRect(ui.connect)) {
+        G.name = (G.nameStr.trim() || 'Pilot' + (100 + irand(900)));
+        saveName(G.name);
+        if (nameInput) nameInput.blur();
+        netConnect();
+        return;
+      }
+      if (inRect(ui.back)) G.state = 'title';
+    } else if (G.state === 'error') {
+      netConnect();   // tap anywhere retries
+    } else if (G.state === 'play') {
+      if (G.paused) { if (inRect(ui.abandon)) leaveToTitle(); else G.paused = false; return; }
+      if (G.match && G.match.over && !G.online) {
+        if (inRect(ui.hangar)) leaveToTitle();
+        else startSolo(G.player ? G.player.type : SHIP_ORDER[G.sel]);
+      }
+    }
+  }
+  function onTouchStart(e) {
+    e.preventDefault();
+    T.active = true;
+    audioInit();
+    if (SFX.ctx && SFX.ctx.state === 'suspended') SFX.ctx.resume();
+    for (const t of e.changedTouches) {
+      const p = touchPos(t);
+      if (G.state === 'play' && !G.paused) {
+        let hit = null;
+        for (const b of T.btns) {
+          if (Math.hypot(p.x - b.x, p.y - b.y) <= b.r + 8) { hit = b; break; }
+        }
+        if (hit) { hit.id = t.identifier; pressTouchButton(hit.key); continue; }
+        if (p.x < vw * 0.48 && G.player && !G.player.dead) {
+          T.stick = { id: t.identifier, x0: p.x, y0: p.y, dx: 0, dy: 0 };
+          continue;
+        }
+      }
+      handleTap(p);
+    }
+  }
+  function onTouchMove(e) {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (T.stick && t.identifier === T.stick.id) {
+        const p = touchPos(t);
+        let dx = p.x - T.stick.x0, dy = p.y - T.stick.y0;
+        const d = Math.hypot(dx, dy);
+        if (d > 74) { dx = dx / d * 74; dy = dy / d * 74; }
+        T.stick.dx = dx; T.stick.dy = dy;
+      }
+    }
+  }
+  function onTouchEnd(e) {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (T.stick && t.identifier === T.stick.id) T.stick = null;
+      for (const b of T.btns) {
+        if (b.id === t.identifier) {
+          b.id = null;
+          if (b.key === 'fire') T.fire = false;
+          if (b.key === 'bomb') T.bomb = false;
+        }
+      }
+    }
+  }
+  // hidden input summons the OS keyboard for callsign entry
+  let nameInput = null;
+  function ensureNameInput() {
+    const doc = GLOBAL.document;
+    if (nameInput || !doc || !doc.body) return;
+    nameInput = doc.createElement('input');
+    nameInput.type = 'text';
+    nameInput.maxLength = 14;
+    nameInput.autocapitalize = 'off';
+    nameInput.style.cssText = 'position:fixed;top:0;left:0;width:10px;height:24px;opacity:0.01;font-size:16px;border:0;background:transparent;color:transparent;';
+    nameInput.value = G.nameStr || '';
+    nameInput.addEventListener('input', () => {
+      G.nameStr = nameInput.value.replace(/[^\w\-\. ]/g, '').slice(0, 14);
+    });
+    nameInput.addEventListener('keydown', ev => {
+      if (ev.key === 'Enter') {
+        G.name = (G.nameStr.trim() || 'Pilot' + (100 + irand(900)));
+        saveName(G.name);
+        nameInput.blur();
+        netConnect();
+      }
+    });
+    doc.body.appendChild(nameInput);
+  }
 
   // ---------------------------------------------------------------- audio
   const SFX = { ctx: null };
@@ -3051,9 +3222,10 @@
   function drawHUD() {
     const p = G.player;
     if (!p) return;
+    const narrow = T.active && vw < 640;   // phone layout
 
     // energy bar with segment ticks + glow cap
-    const bw = Math.min(380, vw - 40), bx = vw / 2 - bw / 2, by = 16;
+    const bw = Math.min(380, vw - 40), bx = vw / 2 - bw / 2, by = narrow ? 60 : 16;
     const frac = clamp(p.energy / p.maxEnergy, 0, 1);
     panel(bx - 5, by - 5, bw + 10, 27);
     ctx.fillStyle = 'rgba(255,255,255,0.05)';
@@ -3112,19 +3284,31 @@
       ctx.save();
       ctx.shadowColor = 'rgba(255,200,90,0.8)';
       ctx.shadowBlur = 26;
-      txt(b.main, vw / 2, vh * 0.3, 44, '#ffe9b8', 'center', 800);
+      txt(b.main, vw / 2, vh * 0.3, Math.min(44, vw * 1.5 / Math.max(8, b.main.length)), '#ffe9b8', 'center', 800);
       ctx.restore();
       if (b.sub) txt(b.sub, vw / 2, vh * 0.3 + 34, 15, '#cdb', 'center', 600);
       ctx.globalAlpha = 1;
     }
+    if (T.capable && G.match && G.match.over && !G.online) {
+      panel(vw / 2 - 100, vh * 0.3 + 52, 200, 36);
+      txt('TO HANGAR', vw / 2, vh * 0.3 + 76, 14, '#f98', 'center', 700);
+      T.ui.hangar = { x: vw / 2 - 100, y: vh * 0.3 + 52, w: 200, h: 36 };
+      txt('tap anywhere else to rematch', vw / 2, vh * 0.3 + 108, 12, '#9ab', 'center');
+    }
 
-    // pilot panel
-    panel(12, 12, 196, 90);
-    txt(p.name + '  ·  ' + p.t.label, 22, 32, 13, shipColor(p, 70), 'left', 700);
-    txt('Score ' + p.score, 22, 51, 12, '#cde');
-    txt('Bounty ' + p.bounty, 116, 51, 12, '#fd8');
-    txt('K ' + p.kills + '   D ' + p.deaths, 22, 69, 12, '#9ab');
-    txt((G.online ? 'ONLINE · ' : 'SOLO · ') + 'Best ' + G.best, 22, 87, 11, G.online ? '#6fa' : '#678');
+    // pilot panel (mini on phones)
+    if (narrow) {
+      panel(12, 12, 170, 40);
+      txt(p.name + ' · ' + p.t.label, 20, 27, 11, shipColor(p, 70), 'left', 700);
+      txt('S ' + p.score + '  B ' + p.bounty + '  K ' + p.kills + '/' + p.deaths, 20, 44, 10, '#9ab');
+    } else {
+      panel(12, 12, 196, 90);
+      txt(p.name + '  ·  ' + p.t.label, 22, 32, 13, shipColor(p, 70), 'left', 700);
+      txt('Score ' + p.score, 22, 51, 12, '#cde');
+      txt('Bounty ' + p.bounty, 116, 51, 12, '#fd8');
+      txt('K ' + p.kills + '   D ' + p.deaths, 22, 69, 12, '#9ab');
+      txt((G.online ? 'ONLINE · ' : 'SOLO · ') + 'Best ' + G.best, 22, 87, 11, G.online ? '#6fa' : '#678');
+    }
 
     // loadout
     const items = [
@@ -3134,28 +3318,39 @@
       'Q ×' + p.bursts,
       p.t.blink ? (p.blinkCd > 0 ? 'R BLINK ' + p.blinkCd.toFixed(1) : 'R BLINK ✓') : 'R ×' + p.rockets,
     ];
-    const iw = 86, totW = items.length * iw + (items.length - 1) * 6;
-    let ix = vw / 2 - totW / 2;
-    for (const it of items) {
-      panel(ix, vh - 34, iw, 22);
-      txt(it, ix + iw / 2, vh - 19, 11, 'rgba(170,200,240,0.9)', 'center', 700);
-      ix += iw + 6;
+    if (!narrow) {
+      const iw = 86, totW = items.length * iw + (items.length - 1) * 6;
+      let ix = vw / 2 - totW / 2;
+      for (const it of items) {
+        panel(ix, vh - 34, iw, 22);
+        txt(it, ix + iw / 2, vh - 19, 11, 'rgba(170,200,240,0.9)', 'center', 700);
+        ix += iw + 6;
+      }
     }
 
-    // leaderboard
-    const board = G.W.ships.slice().sort((a, b) => b.score - a.score).slice(0, 6);
-    const lw = 184, lx = vw - lw - 12;
-    panel(lx, 12, lw, 26 + board.length * 17);
-    txt('ZONE STANDINGS', lx + 10, 29, 10, '#68a', 'left', 700);
-    board.forEach((s, i) => {
-      const y = 47 + i * 17;
-      const me = s === G.player;
-      txt((i + 1) + '. ' + s.name, lx + 10, y, 11, me ? '#8ef' : '#bcd', 'left', me ? 700 : 500);
-      txt(String(s.score), lx + lw - 10, y, 11, me ? '#8ef' : '#89a', 'right');
-    });
+    // leaderboard (hidden on touch layouts — the radar takes its corner)
+    if (!T.active) {
+      const board = G.W.ships.slice().sort((a, b) => b.score - a.score).slice(0, 6);
+      const lw = 184, lx = vw - lw - 12;
+      panel(lx, 12, lw, 26 + board.length * 17);
+      txt('ZONE STANDINGS', lx + 10, 29, 10, '#68a', 'left', 700);
+      board.forEach((s, i) => {
+        const y = 47 + i * 17;
+        const me = s === G.player;
+        txt((i + 1) + '. ' + s.name, lx + 10, y, 11, me ? '#8ef' : '#bcd', 'left', me ? 700 : 500);
+        txt(String(s.score), lx + lw - 10, y, 11, me ? '#8ef' : '#89a', 'right');
+      });
+    }
 
-    drawRadar();
+    if (T.active) {
+      const R = Math.min(150, vw * 0.28);
+      drawRadar(vw - R - 12, narrow ? 124 : 84, R);
+    } else {
+      const R = 172;
+      drawRadar(vw - R - 12, vh - R - 12, R);
+    }
     drawMessages();
+    if (T.active) drawTouchUI();
 
     // chat input
     if (G.chatOpen) {
@@ -3179,8 +3374,32 @@
     }
   }
 
-  function drawRadar() {
-    const R = 172, rx = vw - R - 12, ry = vh - R - 12;
+  function drawTouchUI() {
+    layoutTouchButtons();
+    const p = G.player;
+    // stick
+    if (T.stick) {
+      ctx.strokeStyle = 'rgba(140,190,255,0.35)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(T.stick.x0, T.stick.y0, 58, 0, TAU); ctx.stroke();
+      ctx.fillStyle = 'rgba(140,190,255,0.4)';
+      ctx.beginPath(); ctx.arc(T.stick.x0 + T.stick.dx, T.stick.y0 + T.stick.dy, 24, 0, TAU); ctx.fill();
+    } else if (p && !p.dead) {
+      txt('◐ steer', 64, vh - 40, 12, 'rgba(140,190,255,0.4)', 'left', 600);
+    }
+    // buttons
+    for (const b of T.btns) {
+      const held = (b.key === 'fire' && T.fire) || (b.key === 'bomb' && T.bomb);
+      ctx.fillStyle = held ? 'rgba(90,150,255,0.4)' : 'rgba(10,18,36,0.55)';
+      ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, TAU); ctx.fill();
+      ctx.strokeStyle = 'rgba(120,170,240,0.5)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, TAU); ctx.stroke();
+      txt(b.label, b.x, b.y + 4, Math.max(9, b.r * 0.32), '#cde', 'center', 700);
+    }
+  }
+
+  function drawRadar(rx, ry, R) {
     panel(rx - 5, ry - 5, R + 10, R + 10);
     ctx.drawImage(G.radarC, rx, ry, R, R);
     ctx.strokeStyle = 'rgba(70,120,200,0.18)';
@@ -3242,10 +3461,31 @@
     txt('T O P - D O W N   S P A C E   C O M B A T', vw / 2, vh / 2 - 26, 16, '#ffd9a0', 'center', 700);
     ctx.restore();
     const blink = Math.sin(G.time * 4) > -0.3;
-    if (blink) txt('ENTER — SQUAD BATTLE  3v3', vw / 2, vh / 2 + 62, 20, '#cff', 'center', 700);
-    txt('1 duel the Ace   ·   2 squad battle   ·   3 enter the zone   ·   4 hold the core', vw / 2, vh / 2 + 92, 14, '#9bc', 'center', 600);
-    txt('O — online multiplayer', vw / 2, vh / 2 + 118, 16, '#8fd4a8', 'center', 700);
-    txt('best score ' + G.best + '   ·   duel record ' + G.duelW + 'W – ' + G.duelL + 'L', vw / 2, vh / 2 + 146, 13, '#678', 'center');
+    if (T.capable) {
+      // touch: each mode is its own tappable row
+      const rows = [
+        ['SQUAD BATTLE — 3v3', 'squad', '#cff'],
+        ['DUEL THE ACE', 'duel', '#9bc'],
+        ['ENTER THE ZONE', 'ffa', '#9bc'],
+        ['HOLD THE CORE', 'core', '#9bc'],
+        ['ONLINE MULTIPLAYER', 'online', '#8fd4a8'],
+      ];
+      T.ui.modes = [];
+      let ry = vh / 2 + 48;
+      for (const [label, mode, col] of rows) {
+        const w = 300, h = 34;
+        panel(vw / 2 - w / 2, ry, w, h);
+        txt(label, vw / 2, ry + 22, 15, col, 'center', 700);
+        T.ui.modes.push({ x: vw / 2 - w / 2, y: ry, w, h, mode });
+        ry += h + 8;
+      }
+    } else {
+      if (blink) txt('ENTER — SQUAD BATTLE  3v3', vw / 2, vh / 2 + 62, 20, '#cff', 'center', 700);
+      txt('1 duel the Ace   ·   2 squad battle   ·   3 enter the zone   ·   4 hold the core', vw / 2, vh / 2 + 92, 14, '#9bc', 'center', 600);
+      txt('O — online multiplayer', vw / 2, vh / 2 + 118, 16, '#8fd4a8', 'center', 700);
+    }
+    txt('best score ' + G.best + '   ·   duel record ' + G.duelW + 'W – ' + G.duelL + 'L',
+      vw / 2, T.capable ? vh / 2 + 268 : vh / 2 + 146, 13, '#678', 'center');
     txt('M mute  ·  N music  ·  F fullscreen', vw / 2, vh - 24, 12, '#567', 'center');
   }
 
@@ -3294,6 +3534,18 @@
       ctx.restore();
     }
 
+    // tappable zones: side thirds cycle ships, center launches, corner backs out
+    T.ui.prev = { x: 0, y: cy - 140, w: vw * 0.3, h: 280 };
+    T.ui.next = { x: vw * 0.7, y: cy - 140, w: vw * 0.3, h: 280 };
+    T.ui.launch = { x: vw * 0.3, y: cy - 140, w: vw * 0.4, h: 280 };
+    T.ui.back = { x: 0, y: 0, w: 120, h: 60 };
+    if (T.capable) {
+      txt('‹', vw * 0.12, cy + 12, 44, '#8ab', 'center', 700);
+      txt('›', vw * 0.88, cy + 12, 44, '#8ab', 'center', 700);
+      txt('tap ship to LAUNCH', vw / 2, cy - 120, 12, '#8fd4a8', 'center', 700);
+      txt('‹ back', 46, 34, 14, '#789', 'left', 700);
+    }
+
     const t = SHIP_TYPES[SHIP_ORDER[G.sel]];
     const isNova = t.cls === 'nova';
     txt(isNova ? 'NOVA CLASS — NEW GENERATION' : 'FLEET CLASS', vw / 2, cy + 88, 11,
@@ -3332,7 +3584,16 @@
     txt('PILOT CALLSIGN', vw / 2, vh / 2 - 70, 30, '#c8ecff', 'center', 800);
     panel(vw / 2 - 160, vh / 2 - 30, 320, 44);
     txt(G.nameStr + ((G.time * 3 | 0) % 2 ? '_' : ''), vw / 2, vh / 2 - 1, 20, '#cff', 'center', 700);
-    txt('ENTER — connect to ' + serverURL(), vw / 2, vh / 2 + 50, 14, '#8fd4a8', 'center');
+    T.ui.nameBox = { x: vw / 2 - 160, y: vh / 2 - 30, w: 320, h: 44 };
+    if (T.capable) {
+      panel(vw / 2 - 90, vh / 2 + 28, 180, 38);
+      txt('CONNECT', vw / 2, vh / 2 + 53, 16, '#8fd4a8', 'center', 800);
+      T.ui.connect = { x: vw / 2 - 90, y: vh / 2 + 28, w: 180, h: 38 };
+      T.ui.back = { x: 0, y: 0, w: 120, h: 60 };
+      txt('‹ back', 46, 34, 14, '#789', 'left', 700);
+      txt('tap the box to type · server ' + serverURL(), vw / 2, vh / 2 + 92, 12, '#789', 'center');
+    }
+    txt('ENTER — connect to ' + serverURL(), vw / 2, vh / 2 + (T.capable ? 116 : 50), T.capable ? 11 : 14, '#8fd4a8', 'center');
     const zs = G.zoneStatus;
     if (zs && !zs.err) {
       txt('zone online — ' + zs.players + ' pilot' + (zs.players === 1 ? '' : 's') + ' · ' +
@@ -3377,6 +3638,12 @@
     ];
     let y = vh / 2 - 70;
     for (const l of lines) { txt(l, vw / 2 - 160, y, 14, '#abc', 'left', 500); y += 24; }
+    if (T.capable) {
+      panel(vw / 2 - 110, vh - 90, 220, 40);
+      txt('ABANDON TO TITLE', vw / 2, vh - 64, 14, '#f98', 'center', 700);
+      T.ui.abandon = { x: vw / 2 - 110, y: vh - 90, w: 220, h: 40 };
+      txt('tap anywhere else to resume', vw / 2, vh - 34, 12, '#789', 'center');
+    }
   }
 
   function render() {
@@ -3537,6 +3804,21 @@
     c.strafe = (keys.KeyA ? -1 : 0) + (keys.KeyD ? 1 : 0);
     c.gun = !!(keys.Space || keys.ControlLeft || keys.ControlRight);
     c.bomb = !!(keys.Tab || keys.ShiftLeft || keys.ShiftRight || keys.KeyB);
+    // virtual stick: point the nub, the ship turns and burns that way
+    if (T.active) {
+      if (T.stick) {
+        const d = Math.hypot(T.stick.dx, T.stick.dy);
+        if (d > 12) {
+          const want = Math.atan2(T.stick.dy, T.stick.dx);
+          const off = SIM.angleNorm(want - p.angle);
+          c.turn = clamp(off * 4, -1, 1);
+          const mag = Math.min(1, d / 60);
+          c.thrust = Math.abs(off) < 1.25 ? mag : mag * 0.2;
+        }
+      }
+      if (T.fire) c.gun = true;
+      if (T.bomb) c.bomb = true;
+    }
   }
 
   const HANDLED = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab',
@@ -3705,11 +3987,19 @@
       releaseAllKeys();   // no stuck thrusters after alt-tab
       if (G.state === 'play' && !G.online) G.paused = true;
     });
-    canvas.addEventListener('mousedown', () => {
+    canvas.addEventListener('mousedown', e => {
       audioInit();
       if (SFX.ctx && SFX.ctx.state === 'suspended') SFX.ctx.resume();
-      if (G.state === 'title') { G.online = false; G.state = 'select'; }
+      if (!T.active) {
+        if (G.state === 'title') { G.online = false; G.state = 'select'; }
+        return;
+      }
+      // touch-first devices route synthesized mouse events through taps too
     });
+    canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+    canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+    canvas.addEventListener('touchend', onTouchEnd, { passive: false });
+    canvas.addEventListener('touchcancel', onTouchEnd, { passive: false });
     // keepalive so the server doesn't drop us when the tab is throttled
     setInterval(() => { if (G.online) netSend({ t: 'ka' }); }, 5000);
     // music sequencer lookahead (starts producing sound once audio unlocks)
