@@ -18,10 +18,13 @@
 
   const TAU = Math.PI * 2;
   const TILE = 16;
-  const MAPS = 192;
+  // A real sector of space: 512x512 tiles (8192px) — crossing it at full burn
+  // takes upward of twenty seconds, so travel is a phase of the game and a
+  // contact on the radar is something you chase.
+  const MAPS = 512;
   const WORLD = TILE * MAPS;
   const STEP = 1 / 60;
-  const PRIZE_CAP = 30;
+  const PRIZE_CAP = 80;
 
   const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
   const rand = (a, b) => a === undefined ? Math.random() : a + Math.random() * (b - a);
@@ -250,6 +253,7 @@
     // open battlegrounds: big fields where dogfights happen in clean space.
     // Structures can't spawn in them, and stragglers get carved out after.
     const MC = MAPS / 2;
+    const SC = (MAPS * MAPS) / (192 * 192);   // area vs the original compact map
     const clearings = [
       { x: MC, y: MC, r: 30 },            // arena + its approaches
       { x: MC - 60, y: MC, r: 26 },       // west staging field (blue flank)
@@ -257,13 +261,15 @@
       { x: MC, y: MC - 62, r: 20 },       // north field
       { x: MC, y: MC + 62, r: 20 },       // south field
     ];
-    for (let i = 0; i < 2; i++) {
+    // open battlefields scattered through the frontier
+    for (let i = 0; i < Math.round(2 * SC); i++) {
       clearings.push({ x: 28 + rn(MAPS - 56), y: 28 + rn(MAPS - 56), r: 15 + rn(9) });
     }
     const inClearing = (x, y, margin) =>
       clearings.some(cl => hyp(x - cl.x, y - cl.y) < cl.r + (margin || 0));
 
-    const structures = style === 'gauntlet' ? 40 : style === 'rings' ? 25 : 60;
+    // slightly sparser per-area than the old map: deep space should feel open
+    const structures = Math.round((style === 'gauntlet' ? 34 : style === 'rings' ? 20 : 50) * SC);
     for (let i = 0; i < structures; i++) {
       const cx = 8 + rn(MAPS - 16), cy = 8 + rn(MAPS - 16);
       if (inClearing(cx, cy, 6)) continue;   // keep the battlegrounds open
@@ -319,9 +325,9 @@
     }
     if (style === 'gauntlet') {
       // long broken corridor walls channel the fights into lanes
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < Math.round(10 * MAPS / 192); i++) {
         const horiz = rng() < 0.5;
-        const len = 30 + rn(50);
+        const len = 40 + rn(80);
         const px = 10 + rn(MAPS - 20 - (horiz ? len : 0));
         const py = 10 + rn(MAPS - 20 - (horiz ? 0 : len));
         let gapAt = 6 + rn(8);
@@ -335,8 +341,8 @@
         }
       }
     }
-    for (let i = 0; i < 8; i++) {
-      const ang = i / 8 * TAU + 0.4;
+    for (let i = 0; i < 12; i++) {
+      const ang = i / 12 * TAU + 0.4;
       const sx = Math.round(C + Math.cos(ang) * MAPS * 0.36);
       const sy = Math.round(C + Math.sin(ang) * MAPS * 0.36);
       for (let ty = -4; ty <= 4; ty++)
@@ -359,10 +365,25 @@
     }
     return { x: WORLD / 2, y: WORLD / 2 };
   }
+  // A clear point in the mid-sector disc around the arena — the hotspot where
+  // the population concentrates. The frontier beyond is for roaming, prize
+  // runs, and long chases, not for respawn commutes.
+  function midSectorPoint(W) {
+    for (let i = 0; i < 60; i++) {
+      const a = rand(0, TAU), rr = Math.sqrt(rand()) * MAPS * 0.3;
+      const tx = (MAPS / 2 + Math.cos(a) * rr) | 0, ty = (MAPS / 2 + Math.sin(a) * rr) | 0;
+      let ok = true;
+      for (let j = -1; j <= 1 && ok; j++)
+        for (let k = -1; k <= 1 && ok; k++)
+          if (tileSolid(W, tx + k, ty + j)) ok = false;
+      if (ok) return { x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE };
+    }
+    return randClearPoint(W);
+  }
   function findSpawn(W, self) {
     let best = null, bestD = -1;
     for (let i = 0; i < 40; i++) {
-      const p = randClearPoint(W);
+      const p = midSectorPoint(W);
       let nearest = 1e9;
       for (const o of W.ships) {
         if (o === self || o.dead) continue;
@@ -744,7 +765,7 @@
     for (const o of W.ships) {
       if (o === s || o.dead) continue;
       if (s.team && o.team === s.team) continue;          // never hunt teammates
-      let range = s.team ? 2200 : 1150;                    // squads seek the fight
+      let range = s.team ? 2200 : 1400;                    // squads seek the fight
       if (o.t.stealth) range *= 0.45;
       const d = dist2(s, o);
       if (d < range && d < bd) { bd = d; best = o; }
@@ -815,7 +836,11 @@
           const d = hyp(p.x - s.x, p.y - s.y);
           if (d < pd) { pd = d; pz = p; }
         }
-        a.wp = pz ? { x: pz.x, y: pz.y } : randClearPoint(W);
+        // no green in reach: mostly drift back toward the mid-sector hotspot
+        // (keeps the zone's fights findable in a huge map), sometimes strike
+        // out for the frontier
+        a.wp = pz ? { x: pz.x, y: pz.y }
+          : Math.random() < 0.6 ? midSectorPoint(W) : randClearPoint(W);
       }
       desired = Math.atan2(a.wp.y - s.y, a.wp.x - s.x); th = 0.85;
     }

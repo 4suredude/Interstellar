@@ -26,7 +26,7 @@
     mode: 'ffa', pendingMode: 'squad', match: null,
     banner: null, lastKillT: -99, combo: 0, duelW: 0, duelL: 0,
     demoT: 0, demoShip: null,
-    mapBig: null, radarC: null,
+    mapChunks: null, radarC: null,
     // net
     net: null, netErr: '', myId: 0, name: '', nameStr: '', stateTick: 0, kaTimer: 0,
     chatOpen: false, chatStr: '',
@@ -915,20 +915,65 @@
   function newSoloWorld() {
     G.W = SIM.createWorld({ seed: (Math.random() * 1e9) | 0, spawnPrizes: true, zoneWorld: true });
     prerenderMap();
-    SIM.addBots(G.W, 10);
-    for (let i = 0; i < 14; i++) {
+    SIM.addBots(G.W, 16);
+    for (let i = 0; i < 40; i++) {
       const p = SIM.randClearPoint(G.W);
       SIM.addPrize(G.W, p.x, p.y);
     }
     SIM.drainEvents(G.W);
   }
 
+  // The sector is far too big to prerender as one canvas (8192px square would
+  // be a quarter-gigabyte of pixels), so the map bakes lazily in 512px chunks
+  // as the camera reaches them, with an LRU cache. Baking a chunk is a couple
+  // of milliseconds once; drawing a baked chunk is one drawImage.
+  const CHUNK_T = 32;                 // tiles per chunk edge
+  const CHUNK_PX = CHUNK_T * TILE;    // 512px
+  const NCHUNK = Math.ceil(MAPS / CHUNK_T);
+  const CHUNK_CACHE = 60;             // ~60MB worst case, far less in practice
+
   function prerenderMap() {
     const W = G.W;
     const doc = GLOBAL.document;
-    const big = doc.createElement('canvas');
-    big.width = WORLD; big.height = WORLD;
-    const c = big.getContext('2d');
+    G.mapChunks = new Map();          // invalidates every baked chunk
+
+    const rc = doc.createElement('canvas');
+    rc.width = MAPS; rc.height = MAPS;
+    const r = rc.getContext('2d');
+    r.fillStyle = '#41639f';
+    for (let ty = 0; ty < MAPS; ty++)
+      for (let tx = 0; tx < MAPS; tx++)
+        if (SIM.tileSolid(W, tx, ty)) r.fillRect(tx, ty, 1, 1);
+    G.radarC = rc;
+  }
+
+  function mapChunk(chx, chy) {
+    const key = chy * NCHUNK + chx;
+    let ch = G.mapChunks.get(key);
+    if (ch) {
+      // re-insert so Map order tracks recency and eviction is LRU
+      G.mapChunks.delete(key); G.mapChunks.set(key, ch);
+      return ch;
+    }
+    ch = bakeChunk(chx, chy);
+    G.mapChunks.set(key, ch);
+    if (G.mapChunks.size > CHUNK_CACHE) {
+      const oldest = G.mapChunks.keys().next().value;
+      G.mapChunks.delete(oldest);
+    }
+    return ch;
+  }
+
+  function bakeChunk(chx, chy) {
+    const W = G.W;
+    const doc = GLOBAL.document;
+    const cnv = doc.createElement('canvas');
+    cnv.width = CHUNK_PX; cnv.height = CHUNK_PX;
+    const c = cnv.getContext('2d');
+    c.translate(-chx * CHUNK_PX, -chy * CHUNK_PX);
+    // include a one-tile border ring so neighbours' glow bleeds in correctly
+    const tx0 = Math.max(0, chx * CHUNK_T - 1), ty0 = Math.max(0, chy * CHUNK_T - 1);
+    const tx1 = Math.min(MAPS, (chx + 1) * CHUNK_T + 1), ty1 = Math.min(MAPS, (chy + 1) * CHUNK_T + 1);
     // Solid, chunky, bevelled tiles — the original's maps were rock and
     // steel, not wireframes. Deterministic per-tile hash varies the tone.
     const hash = (x, y) => {
@@ -943,13 +988,13 @@
     c.shadowBlur = 11;
     c.fillStyle = '#161e34';
     c.beginPath();
-    for (let ty = 0; ty < MAPS; ty++)
-      for (let tx = 0; tx < MAPS; tx++)
+    for (let ty = ty0; ty < ty1; ty++)
+      for (let tx = tx0; tx < tx1; tx++)
         if (SIM.tileSolid(W, tx, ty)) c.rect(tx * TILE, ty * TILE, TILE, TILE);
     c.fill();
     c.restore();
-    for (let ty = 0; ty < MAPS; ty++) {
-      for (let tx = 0; tx < MAPS; tx++) {
+    for (let ty = ty0; ty < ty1; ty++) {
+      for (let tx = tx0; tx < tx1; tx++) {
         if (!SIM.tileSolid(W, tx, ty)) continue;
         const x = tx * TILE, y = ty * TILE;
         const h0 = hash(tx, ty);
@@ -986,16 +1031,7 @@
         c.stroke();
       }
     }
-    G.mapBig = big;
-
-    const rc = doc.createElement('canvas');
-    rc.width = MAPS; rc.height = MAPS;
-    const r = rc.getContext('2d');
-    r.fillStyle = '#41639f';
-    for (let ty = 0; ty < MAPS; ty++)
-      for (let tx = 0; tx < MAPS; tx++)
-        if (SIM.tileSolid(W, tx, ty)) r.fillRect(tx, ty, 1, 1);
-    G.radarC = rc;
+    return cnv;
   }
 
   // ---------------------------------------------------------------- update
@@ -1461,12 +1497,28 @@
       ctx.lineTo(s.x - s.vx * 0.12, s.y - s.vy * 0.12);
       ctx.stroke();
     }
+    // at hypersonic speeds the starfield streaks along your velocity —
+    // the faster you burn, the longer the lines
+    const pl = G.player;
+    const pspd = pl && !pl.dead ? Math.hypot(pl.vx, pl.vy) : 0;
+    const streak = clamp((pspd - 300) / 400, 0, 1);
     for (const st of stars) {
       const sx = ((st.x - G.cam.x * st.z) % (vw + 100) + vw + 100) % (vw + 100) - 50;
       const sy = ((st.y - G.cam.y * st.z) % (vh + 100) + vh + 100) % (vh + 100) - 50;
       const tw = 0.55 + 0.45 * Math.sin(G.time * 1.7 + st.tw);
-      ctx.fillStyle = 'rgba(' + st.tint + ',' + (0.3 + 0.55 * st.z * tw).toFixed(3) + ')';
-      ctx.fillRect(sx, sy, st.size, st.size);
+      const a = (0.3 + 0.55 * st.z * tw).toFixed(3);
+      if (streak > 0.04) {
+        const L = streak * st.z * 0.09;
+        ctx.strokeStyle = 'rgba(' + st.tint + ',' + a + ')';
+        ctx.lineWidth = st.size;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(sx - pl.vx * L, sy - pl.vy * L);
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = 'rgba(' + st.tint + ',' + a + ')';
+        ctx.fillRect(sx, sy, st.size, st.size);
+      }
     }
   }
 
@@ -1911,7 +1963,16 @@
     const shx = (Math.random() - 0.5) * G.shake, shy = (Math.random() - 0.5) * G.shake;
     ctx.translate(Math.round(vw / 2 - G.cam.x + shx), Math.round(vh / 2 - G.cam.y + shy));
 
-    ctx.drawImage(G.mapBig, 0, 0);
+    // draw only the chunks the camera can see (baked on demand, LRU cached)
+    {
+      const x0 = Math.max(0, ((G.cam.x - vw / 2) / CHUNK_PX) | 0);
+      const y0 = Math.max(0, ((G.cam.y - vh / 2) / CHUNK_PX) | 0);
+      const x1 = Math.min(NCHUNK - 1, ((G.cam.x + vw / 2) / CHUNK_PX) | 0);
+      const y1 = Math.min(NCHUNK - 1, ((G.cam.y + vh / 2) / CHUNK_PX) | 0);
+      for (let cy = y0; cy <= y1; cy++)
+        for (let cx = x0; cx <= x1; cx++)
+          ctx.drawImage(mapChunk(cx, cy), cx * CHUNK_PX, cy * CHUNK_PX);
+    }
 
     // core objective ring
     if (G.match && G.match.mode === 'core') {
@@ -2252,40 +2313,61 @@
     }
   }
 
+  // Local-window radar, like the original's: it scans the space around you,
+  // not the whole sector. A contact sliding in from the edge is something you
+  // chase — or something coming for you.
+  const RADAR_RANGE = 3600; // world px covered by the radar square
   function drawRadar(rx, ry, R) {
     panel(rx - 5, ry - 5, R + 10, R + 10);
-    ctx.drawImage(G.radarC, rx, ry, R, R);
+    const RW = Math.min(WORLD, RADAR_RANGE);
+    const fx = G.player ? G.player.x : G.cam.x, fy = G.player ? G.player.y : G.cam.y;
+    const wx = clamp(fx - RW / 2, 0, WORLD - RW);
+    const wy = clamp(fy - RW / 2, 0, WORLD - RW);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(rx, ry, R, R);
+    ctx.clip();
+    ctx.drawImage(G.radarC, wx / TILE, wy / TILE, RW / TILE, RW / TILE, rx, ry, R, R);
     ctx.strokeStyle = 'rgba(70,120,200,0.18)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(rx + R / 2, ry); ctx.lineTo(rx + R / 2, ry + R);
     ctx.moveTo(rx, ry + R / 2); ctx.lineTo(rx + R, ry + R / 2);
     ctx.stroke();
-    const k = R / WORLD;
+    const k = R / RW;
     const swa = G.time * 1.2 % TAU;
     ctx.strokeStyle = 'rgba(90,200,160,0.25)';
     ctx.beginPath();
     ctx.moveTo(rx + R / 2, ry + R / 2);
     ctx.lineTo(rx + R / 2 + Math.cos(swa) * R / 2, ry + R / 2 + Math.sin(swa) * R / 2);
     ctx.stroke();
+    const on = (x, y) => x >= wx && x <= wx + RW && y >= wy && y <= wy + RW;
     for (const p of G.W.prizes) {
+      if (!on(p.x, p.y)) continue;
       ctx.fillStyle = 'rgba(90,255,130,0.8)';
-      ctx.fillRect(rx + p.x * k - 1, ry + p.y * k - 1, 2, 2);
+      ctx.fillRect(rx + (p.x - wx) * k - 1, ry + (p.y - wy) * k - 1, 2, 2);
     }
     for (const s of G.W.ships) {
-      if (s.dead) continue;
+      if (s.dead || !on(s.x, s.y)) continue;
       if (s === G.player) {
         ctx.fillStyle = (G.time * 4 | 0) % 2 ? '#fff' : '#8ef';
-        ctx.fillRect(rx + s.x * k - 2, ry + s.y * k - 2, 4, 4);
+        ctx.fillRect(rx + (s.x - wx) * k - 2, ry + (s.y - wy) * k - 2, 4, 4);
       } else {
         const ally = s.team && G.player && G.player.team && s.team === G.player.team;
         if ((s.t.stealth || s.t.radarStealth) && !ally) continue; // ghosts don't paint on radar
         ctx.fillStyle = ally ? 'rgba(120,180,255,0.95)' : 'rgba(255,120,90,0.9)';
-        ctx.fillRect(rx + s.x * k - 1.5, ry + s.y * k - 1.5, 3, 3);
+        ctx.fillRect(rx + (s.x - wx) * k - 1.5, ry + (s.y - wy) * k - 1.5, 3, 3);
       }
     }
     ctx.strokeStyle = 'rgba(140,180,240,0.35)';
-    ctx.strokeRect(rx + (G.cam.x - vw / 2) * k, ry + (G.cam.y - vh / 2) * k, vw * k, vh * k);
+    ctx.strokeRect(rx + (G.cam.x - vw / 2 - wx) * k, ry + (G.cam.y - vh / 2 - wy) * k, vw * k, vh * k);
+    ctx.restore();
+    // sector grid readout: 16x16 lettered cells across the whole map
+    if (G.player) {
+      const cell = WORLD / 16;
+      const sx = clamp((G.player.x / cell) | 0, 0, 15), sy = clamp((G.player.y / cell) | 0, 0, 15);
+      txt('SECTOR ' + String.fromCharCode(65 + sx) + (sy + 1), rx + R / 2, ry + 12, 10, 'rgba(150,195,255,0.75)', 'center', 600);
+    }
   }
 
   function drawMessages() {
@@ -2505,7 +2587,7 @@
     // depth haze: everything behind this line is scenery, not gameplay
     ctx.fillStyle = 'rgba(3,5,12,0.22)';
     ctx.fillRect(0, 0, vw, vh);
-    if (G.W && G.mapBig) drawWorld();
+    if (G.W && G.mapChunks) drawWorld();
     applyBloom();
     if (vignette) ctx.drawImage(vignette, 0, 0, vw, vh);
     if (G.state === 'title') drawTitle();

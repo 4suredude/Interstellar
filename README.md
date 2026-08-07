@@ -19,6 +19,15 @@ multikill callouts, and matches short enough to always want one more.
 | **Duel** (`1` on the title screen) | You vs **the Ace** — a high-skill AI duelist. First to 5. Respawns are near-instant, facing each other across the central arena. Your lifetime W–L record is kept. |
 | **Squad Battle** (`2` or `Enter`) | 3v3 team dogfight vs bots — blue vs red, no friendly fire, anchored team spawns, wingmen that hunt with you. First to 15. Every ship keeps its own identity color — team reads from the blue/red halo ring, nameplates, and radar. |
 | **The Zone** (`3`) | Drop into the persistent living world — no match, no clock. The zone fights on while you're at the title screen and remembers everything when you return. |
+
+All of it plays out across a **vast sector** — a 512×512-tile map (8192px)
+that takes upward of twenty seconds to cross at full burn. The population
+concentrates in the mid-sector around the arena, so fights are easy to find,
+while the frontier beyond is open space for prize runs and long hypersonic
+chases — the starfield streaks with your speed. The corner radar is a
+**local scanner**, not a full-map view: it covers the space around you and
+shows your position on a lettered 16×16 sector grid (`SECTOR H8`), so a
+contact sliding in from its edge is something you hunt down.
 | **Hold the Core** (`4`) | 3v3 objective mode: hold the glowing center ring **alone** for 3 seconds to score a point. First to 20. Forces the fight into one shared arena. |
 | **Online** (`O`) | Real multiplayer with rounds, MVPs, side swaps, an **Elo duel ladder**, and persistent pilot stats. `MODE=teams` (default), `MODE=core`, or `MODE=ffa`. |
 
@@ -139,7 +148,8 @@ A new generation of hulls joins the fleet — each with a mechanic all its own:
   nozzles, and cockpit glass with specular glints.
 - Maps are **solid chunky bevelled tiles** with per-tile tonal variation and
   rock speckle, edged with a faint energized rim — steel and stone, not
-  wireframe.
+  wireframe. The huge sector bakes lazily in 512px chunks with an LRU cache,
+  so even the 8192px map costs one `drawImage` per visible chunk.
 - Bullets and bombs wear their **level colors** (L1 red-orange, L2 yellow,
   L3 blue); space is near-black with a whisper of nebula.
 - On top of that, the modern layer: subtle bloom post-processing, engine
