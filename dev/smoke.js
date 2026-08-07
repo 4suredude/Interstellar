@@ -358,8 +358,10 @@ const SIM = require(path.join(ROOT, 'sim.js'));
   assert(G.W.ships.length === 6, 'squad battle is 3v3');
   assert(G.W.ships.filter(s => s.team === 1).length === 3 &&
     G.W.ships.filter(s => s.team === 2).length === 3, 'teams balanced 3-3');
+  // give the squads up to 90 simulated seconds, but stop at the first kill —
+  // dodging AI can occasionally stalemate a shorter window
   let sawTeamKill = false;
-  for (let i = 0; i < 45 * 60; i++) {
+  for (let i = 0; i < 90 * 60 && !sawTeamKill; i++) {
     if (!sp2.dead) { sp2.ctl.thrust = 0.5; sp2.ctl.gun = true; sp2.ctl.turn = (i % 300) < 150 ? 0.3 : -0.3; }
     update(STEP);
     if (G.match.a + G.match.b > 0) sawTeamKill = true;

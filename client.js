@@ -279,27 +279,45 @@
   const sndLose = () => { [330, 311, 233].forEach((f, i) => tone('sine', f, f * 0.97, 0.4, 0.18, i * 0.18)); };
 
   // ---------------------------------------------------------------- music
-  // Generative space electronica, synthesized live — no audio files.
-  // A 16-bar loop: slow minor pads, a sub bass, a delayed arpeggio,
-  // soft four-on-the-floor kick and offbeat hats, and rare high sparkles.
+  // Generative rave electronica, synthesized live — no audio files.
+  // Not a loop: a 64-bar arrangement that keeps moving. Ambient opening,
+  // a climbing build with snare rolls and a four-bar riser, a full-energy
+  // four-on-the-floor DROP with rolling offbeat bass, an acid lead and
+  // rave stabs, a weightless breakdown — then up again. Chord progression
+  // and arp patterns rotate every pass, so it takes ~6 minutes to repeat.
   const MUS = { on: true, step: 0, nextT: 0 };
-  const MUS_BPM = 96, MUS_STEP = 60 / MUS_BPM / 4; // 16th notes
-  // i — VI — III — VII in A minor, voiced low and wide
-  const MUS_CHORDS = [
-    [57, 60, 64, 69],   // Am
-    [53, 57, 60, 65],   // F
-    [48, 55, 60, 64],   // C
-    [55, 59, 62, 67],   // G
+  const MUS_BPM = 126, MUS_STEP = 60 / MUS_BPM / 4; // 16th notes
+  // three A-minor progressions, rotated per pass through the form
+  const MUS_PROGS = [
+    [[57, 60, 64, 69], [53, 57, 60, 65], [48, 55, 60, 64], [55, 59, 62, 67]],  // i VI III VII
+    [[57, 60, 64, 69], [55, 59, 62, 67], [53, 57, 60, 65], [55, 59, 62, 67]],  // i VII VI VII
+    [[57, 60, 64, 69], [52, 55, 59, 64], [53, 57, 60, 65], [55, 59, 62, 67]],  // i v VI VII
   ];
-  const MUS_ARP_PAT = [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1];
+  const MUS_ARPS = [
+    [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1],
+    [1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0],
+    [1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1],
+  ];
+  // the form, bar by bar: {section name, bar-in-section, section length}
+  const MUS_SEC = [];
+  for (const [name, bars] of [['calm', 8], ['build', 8], ['drop', 16], ['break', 8], ['build', 8], ['drop', 16]])
+    for (let i = 0; i < bars; i++) MUS_SEC.push({ n: name, i, len: bars });
+  const MUS_BARS = MUS_SEC.length;
   const midiF = m => 440 * Math.pow(2, (m - 69) / 12);
+  // deterministic hash → the acid line is random-sounding but repeats its bar
+  const musRnd = n => { let h = (n * 2654435761) >>> 0; h ^= h >> 13; h = (h * 1274126177) >>> 0; return ((h ^ h >> 16) >>> 0) / 4294967296; };
 
   function musicInit() {
     if (!SFX.ctx || SFX.musBus) return;
     const a = SFX.ctx;
     SFX.musBus = a.createGain();
     SFX.musBus.gain.value = 0.3;
-    SFX.musBus.connect(SFX.master);
+    // glue compressor so the drop can hit hard without clipping
+    const comp = a.createDynamicsCompressor();
+    comp.threshold.value = -18; comp.ratio.value = 6;
+    comp.attack.value = 0.004; comp.release.value = 0.18;
+    SFX.musBus.connect(comp);
+    comp.connect(SFX.master);
     // dotted-8th feedback delay for the arp — the classic space echo
     const d = a.createDelay(1);
     d.delayTime.value = MUS_STEP * 3;
@@ -330,6 +348,7 @@
   }
   function musPad(t, chord, dur) {
     const a = SFX.ctx;
+    const atk = Math.min(1.2, dur * 0.3), rel = Math.min(1.6, dur * 0.35);
     // deep root drone
     musNote(t, midiF(chord[0] - 24), dur, 0.09, 'sine', 0, false);
     // two detuned saws per chord tone, slow bloom
@@ -344,27 +363,38 @@
         f.frequency.linearRampToValueAtTime(320, t + dur);
         const g = a.createGain();
         g.gain.setValueAtTime(0.0001, t);
-        g.gain.linearRampToValueAtTime(0.035, t + 1.6);
-        g.gain.setValueAtTime(0.035, t + dur - 1.8);
+        g.gain.linearRampToValueAtTime(0.035, t + atk);
+        g.gain.setValueAtTime(0.035, t + dur - rel);
         g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
         o.connect(f); f.connect(g); g.connect(SFX.musBus);
         o.start(t); o.stop(t + dur + 0.1);
       }
     }
   }
-  function musKick(t) {
+  function musKick(t, punch) {
+    const p = punch == null ? 1 : punch;
     const a = SFX.ctx;
     const o = a.createOscillator();
     o.type = 'sine';
-    o.frequency.setValueAtTime(115, t);
-    o.frequency.exponentialRampToValueAtTime(38, t + 0.11);
+    o.frequency.setValueAtTime(105 + 55 * p, t);
+    o.frequency.exponentialRampToValueAtTime(38, t + 0.1);
     const g = a.createGain();
-    g.gain.setValueAtTime(0.42, t);
+    g.gain.setValueAtTime(0.3 + 0.2 * p, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
     o.connect(g); g.connect(SFX.musBus);
     o.start(t); o.stop(t + 0.2);
+    if (p >= 0.95) {
+      // click transient: what makes a rave kick punch through the mix
+      const src = a.createBufferSource(); src.buffer = SFX.noise;
+      const f = a.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 3000;
+      const ng = a.createGain();
+      ng.gain.setValueAtTime(0.08, t);
+      ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.02);
+      src.connect(f); f.connect(ng); ng.connect(SFX.musBus);
+      src.start(t); src.stop(t + 0.03);
+    }
   }
-  function musHat(t, vol) {
+  function musHat(t, vol, dec) {
     const a = SFX.ctx;
     const src = a.createBufferSource();
     src.buffer = SFX.noise;
@@ -373,23 +403,184 @@
     f.type = 'highpass'; f.frequency.value = 7000;
     const g = a.createGain();
     g.gain.setValueAtTime(vol, t);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + (dec || 0.05));
     src.connect(f); f.connect(g); g.connect(SFX.musBus);
-    src.start(t); src.stop(t + 0.08);
+    src.start(t); src.stop(t + (dec || 0.05) + 0.03);
   }
-  function musScheduleStep(step, t) {
-    const chord = MUS_CHORDS[(step >> 6) & 3];   // chord change every 4 bars
-    const s16 = step & 15;
-    if ((step & 63) === 0) musPad(t, chord, 64 * MUS_STEP + 0.5);
-    if (s16 === 0 || s16 === 10) musNote(t, midiF(chord[0] - 12), 0.5, 0.4, 'triangle', 320, false);
-    if ((step & 3) === 0) musKick(t);
-    if ((step & 3) === 2) musHat(t, 0.045);
-    if (MUS_ARP_PAT[s16]) {
-      const tone = chord[((step * 7) >> 2) % chord.length] + 12 * (1 + ((step >> 3) & 1));
-      musNote(t, midiF(tone), 0.26, 0.13 + Math.random() * 0.04, 'square', 1900, true);
+  function musSnare(t, vol) {
+    const a = SFX.ctx;
+    const src = a.createBufferSource(); src.buffer = SFX.noise; src.loop = true;
+    const f = a.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1900; f.Q.value = 0.8;
+    const g = a.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.13);
+    src.connect(f); f.connect(g); g.connect(SFX.musBus);
+    src.start(t); src.stop(t + 0.15);
+    const o = a.createOscillator(); o.type = 'triangle';
+    o.frequency.setValueAtTime(210, t);
+    o.frequency.exponentialRampToValueAtTime(150, t + 0.08);
+    const og = a.createGain();
+    og.gain.setValueAtTime(vol * 0.8, t);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+    o.connect(og); og.connect(SFX.musBus);
+    o.start(t); o.stop(t + 0.1);
+  }
+  function musBass(t, m, vol) {
+    // the rolling bass: short saw stabs pumping between the kicks
+    const a = SFX.ctx;
+    const o = a.createOscillator(); o.type = 'sawtooth'; o.frequency.value = midiF(m);
+    const f = a.createBiquadFilter(); f.type = 'lowpass';
+    f.frequency.setValueAtTime(900, t);
+    f.frequency.exponentialRampToValueAtTime(320, t + 0.12);
+    const g = a.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.15);
+    o.connect(f); f.connect(g); g.connect(SFX.musBus);
+    o.start(t); o.stop(t + 0.18);
+  }
+  function musAcid(t, m, lp, vol) {
+    // 303-style: saw through a screaming resonant lowpass with a fast env
+    const a = SFX.ctx;
+    const o = a.createOscillator(); o.type = 'sawtooth'; o.frequency.value = midiF(m);
+    const f = a.createBiquadFilter(); f.type = 'lowpass'; f.Q.value = 11;
+    f.frequency.setValueAtTime(lp, t);
+    f.frequency.exponentialRampToValueAtTime(Math.max(240, lp * 0.35), t + 0.11);
+    const g = a.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.13);
+    o.connect(f); f.connect(g); g.connect(SFX.musBus);
+    if (SFX.musDelay) g.connect(SFX.musDelay);
+    o.start(t); o.stop(t + 0.16);
+  }
+  function musStab(t, chord, vol) {
+    // detuned-saw rave stab, filter slamming shut
+    const a = SFX.ctx;
+    for (const m of chord) for (const det of [0.994, 1.006]) {
+      const o = a.createOscillator(); o.type = 'sawtooth'; o.frequency.value = midiF(m + 12) * det;
+      const f = a.createBiquadFilter(); f.type = 'lowpass';
+      f.frequency.setValueAtTime(2600, t);
+      f.frequency.exponentialRampToValueAtTime(500, t + 0.16);
+      const g = a.createGain();
+      g.gain.setValueAtTime(vol / 4, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+      o.connect(f); f.connect(g); g.connect(SFX.musBus);
+      if (SFX.musDelay) g.connect(SFX.musDelay);
+      o.start(t); o.stop(t + 0.2);
     }
-    if (Math.random() < 0.018) {
-      musNote(t, midiF(84 + [0, 3, 7, 10][irand(4)]), 1.8, 0.05, 'sine', 0, true);
+  }
+  function musRiser(t, dur) {
+    // the crescendo: sweeping noise + a pitch climbing four octaves
+    const a = SFX.ctx;
+    const src = a.createBufferSource(); src.buffer = SFX.noise; src.loop = true;
+    const f = a.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 1.2;
+    f.frequency.setValueAtTime(350, t);
+    f.frequency.exponentialRampToValueAtTime(6500, t + dur);
+    const g = a.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.11, t + dur);
+    g.gain.linearRampToValueAtTime(0.0001, t + dur + 0.05);
+    src.connect(f); f.connect(g); g.connect(SFX.musBus);
+    src.start(t); src.stop(t + dur + 0.1);
+    const o = a.createOscillator(); o.type = 'sawtooth';
+    o.frequency.setValueAtTime(midiF(45), t);
+    o.frequency.exponentialRampToValueAtTime(midiF(69), t + dur);
+    const og = a.createGain();
+    og.gain.setValueAtTime(0.0001, t);
+    og.gain.linearRampToValueAtTime(0.05, t + dur);
+    og.gain.linearRampToValueAtTime(0.0001, t + dur + 0.05);
+    o.connect(og); og.connect(SFX.musBus);
+    o.start(t); o.stop(t + dur + 0.1);
+  }
+  function musCrash(t) {
+    const a = SFX.ctx;
+    const src = a.createBufferSource(); src.buffer = SFX.noise; src.loop = true;
+    const f = a.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 4200;
+    const g = a.createGain();
+    g.gain.setValueAtTime(0.16, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 1.4);
+    src.connect(f); f.connect(g); g.connect(SFX.musBus);
+    src.start(t); src.stop(t + 1.5);
+  }
+  function musBoom(t, m) {
+    // sub-drop at the moment of impact
+    const a = SFX.ctx;
+    const o = a.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(midiF(m), t);
+    o.frequency.exponentialRampToValueAtTime(30, t + 0.7);
+    const g = a.createGain();
+    g.gain.setValueAtTime(0.4, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.8);
+    o.connect(g); g.connect(SFX.musBus);
+    o.start(t); o.stop(t + 0.9);
+  }
+
+  function musScheduleStep(step, t) {
+    const bar = Math.floor(step / 16) % MUS_BARS;
+    const pass = Math.floor(step / 16 / MUS_BARS);
+    const sec = MUS_SEC[bar];
+    const prog = MUS_PROGS[pass % MUS_PROGS.length];
+    const chord = prog[bar & 3];
+    const root = chord[0];
+    const s16 = step & 15;
+    const pr = (sec.i * 16 + s16) / (sec.len * 16);   // progress through the section
+    const arp = MUS_ARPS[(pass + (sec.n === 'drop' ? sec.i >> 3 : 0)) % MUS_ARPS.length];
+
+    if (sec.n === 'calm' || sec.n === 'break') {
+      // weightless: pads, sub pulse, echoing arp — the breakdown keeps a
+      // heartbeat kick so the floor never quite stops
+      if ((bar & 1) === 0 && s16 === 0) musPad(t, chord, 32 * MUS_STEP + 0.4);
+      if (s16 === 0 || s16 === 10) musNote(t, midiF(root - 12), 0.5, 0.34, 'triangle', 320, false);
+      if ((s16 & 3) === 2) musHat(t, 0.03);
+      if (sec.n === 'break' && s16 === 0) musKick(t, 0.5);
+      if (arp[s16] && (sec.n === 'break' || (s16 & 1) === 0)) {
+        const m = chord[(step * 7 >> 2) % chord.length] + 12 * (1 + ((step >> 3) & 1));
+        musNote(t, midiF(m), 0.3, sec.n === 'break' ? 0.11 : 0.07, 'square', 1500, true);
+      }
+      if (Math.random() < 0.02) musNote(t, midiF(84 + [0, 3, 7, 10][irand(4)]), 1.8, 0.05, 'sine', 0, true);
+    }
+
+    if (sec.n === 'build') {
+      // the crescendo: everything thickens and sharpens over eight bars
+      const last = sec.i === sec.len - 1;
+      if ((bar & 1) === 0 && s16 === 0) musPad(t, chord, 32 * MUS_STEP + 0.4);
+      if ((s16 & 3) === 0) musKick(t, 0.75 + pr * 0.2);
+      if ((s16 & 3) === 2) musHat(t, 0.04 + pr * 0.03);
+      if (pr > 0.5 && (s16 & 1) === 1) musHat(t, 0.022, 0.03);
+      if (!last && ((s16 & 1) === 0 || pr > 0.45)) musBass(t, root - 12 + ((s16 & 2) ? 12 : 0), 0.13 + pr * 0.08);
+      if (sec.i >= 4 && (s16 === 4 || s16 === 12)) musSnare(t, 0.1 + pr * 0.08);
+      if (arp[s16]) {
+        // the filter opens across the whole build
+        const m = chord[(step * 5 >> 2) % chord.length] + 12 * (1 + ((step >> 3) & 1));
+        musNote(t, midiF(m), 0.24, 0.12, 'square', 700 + pr * 2600, true);
+      }
+      if (sec.i === sec.len - 4 && s16 === 0) musRiser(t, 64 * MUS_STEP);
+      if (last) {
+        // accelerating snare roll: 16ths, then 32nds, straight into the drop
+        musSnare(t, 0.06 + (s16 / 16) * 0.16);
+        if (s16 >= 8) musSnare(t + MUS_STEP / 2, 0.05 + (s16 / 16) * 0.12);
+      }
+    }
+
+    if (sec.n === 'drop') {
+      if (sec.i === 0 && s16 === 0) { musCrash(t); musBoom(t, root - 24); }
+      if ((s16 & 3) === 0) musKick(t, 1);
+      if ((s16 & 3) === 2) musHat(t, 0.05, 0.11);       // open offbeat hats
+      if ((s16 & 1) === 1) musHat(t, 0.02, 0.03);
+      if (s16 === 4 || s16 === 12) musSnare(t, 0.16);
+      // rolling bass fills every 16th the kick doesn't own
+      if ((s16 & 3) !== 0) musBass(t, root - 12 + ((s16 === 6 || s16 === 14) ? 12 : 0), 0.2);
+      // acid lead: per-bar pattern with a slowly breathing filter
+      const seed = (pass * 31 + bar) * 16 + s16;
+      if (musRnd(seed) < 0.62) {
+        const scl = [0, 3, 5, 7, 10, 12];
+        const m = root + scl[(musRnd(seed + 1) * scl.length) | 0] + (musRnd(seed + 2) < 0.2 ? 24 : 12);
+        const breathe = 0.5 + 0.5 * Math.sin((bar + s16 / 16) * 0.7);
+        musAcid(t, m, 500 + 2400 * breathe, musRnd(seed + 3) < 0.25 ? 0.16 : 0.1);
+      }
+      if ((bar & 1) === 0 && (s16 === 0 || s16 === 6)) musStab(t, chord, 0.09);
+      if (Math.random() < 0.012) musNote(t, midiF(96), 1.2, 0.04, 'sine', 0, true);
     }
   }
   function musicTick() {
@@ -400,7 +591,7 @@
     const ahead = now + 0.35;
     while (MUS.nextT < ahead) {
       musScheduleStep(MUS.step, MUS.nextT);
-      MUS.step = (MUS.step + 1) & 511;
+      MUS.step++;
       MUS.nextT += MUS_STEP;
     }
   }
@@ -2943,7 +3134,25 @@
     GLOBAL.requestAnimationFrame(frame);
   }
 
-  GLOBAL.__interstellar = { G, SIM, boot, startSolo, update, render, keys, handleNet, netConnect, STEP };
+  // musTest: schedule every step of three full form passes at zero volume —
+  // exercises every voice of the arrangement without making a sound
+  function musTest() {
+    if (!SFX.ctx) return 'no audio ctx';
+    musicInit();
+    const save = SFX.musBus.gain.value;
+    SFX.musBus.gain.value = 0;
+    const t0 = SFX.ctx.currentTime + 0.1;
+    let n = 0;
+    try {
+      for (let s = 0; s < MUS_BARS * 16 * 3; s++) { musScheduleStep(s, t0 + s * 0.001); n++; }
+    } catch (e) {
+      SFX.musBus.gain.value = save;
+      return 'THREW at step ' + n + ': ' + e;
+    }
+    SFX.musBus.gain.value = save;
+    return 'scheduled ' + n + ' steps (' + MUS_BARS + '-bar form x3) clean';
+  }
+  GLOBAL.__interstellar = { G, SIM, boot, startSolo, update, render, keys, handleNet, netConnect, STEP, MUS, musTest };
 
   if (GLOBAL.document && GLOBAL.document.getElementById) boot();
 })();

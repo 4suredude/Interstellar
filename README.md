@@ -159,10 +159,15 @@ A new generation of hulls joins the fleet — each with a mechanic all its own:
 - **All audio is synthesized live — zero asset files.** Sound effects (guns,
   bombs, explosions, repels, blinks, bounces, low-energy warnings) are
   WebAudio-generated with distance attenuation, and the soundtrack is
-  **generative space electronica**: slow detuned minor pads, a sub-bass
-  pulse, a dotted-eighth delayed arpeggio, soft four-on-the-floor kick and
-  offbeat hats, and rare high sparkles, sequenced live at 96 BPM. Toggle it
-  with `N` (remembered between sessions), mute everything with `M`.
+  **generative rave electronica** sequenced live at 126 BPM — not a loop
+  but a 64-bar arrangement that keeps moving: an ambient opening of detuned
+  pads and space echo, a climbing eight-bar build with accelerating snare
+  rolls and a four-bar riser, then a full-energy **drop** — punchy
+  four-on-the-floor kick, rolling offbeat bass, a resonant acid lead, rave
+  stabs, claps and open hats — into a weightless breakdown and back up.
+  Chord progressions and arp patterns rotate every pass (~6 minutes before
+  it repeats), glued by a bus compressor. Toggle it with `N` (remembered
+  between sessions), mute everything with `M`.
 - AI pilots with target leading, wall avoidance, dodging, fleeing, repel/burst
   usage, and prize hunting — the zone fights on with or without you (watch the
   attract mode behind the title screen).
