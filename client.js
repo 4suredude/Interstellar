@@ -3090,17 +3090,43 @@
   }
 
   // ---------------------------------------------------------------- input
-  function updatePlayerInput() {
+  // Precision flight: digital keys don't slam straight to a hull's full
+  // authority. Each control ramps from a fine-adjustment fraction up to
+  // 100% over a fraction of a second of holding — so a TAP nudges your nose
+  // a couple of degrees or eases you forward, while a HOLD still whips the
+  // ship around at its full rate. Agile hulls (Dagger, Comet) reach full
+  // authority sooner than heavies (Titan, Aegis), so every ship keeps its
+  // character — the Titan feels massive, not mushy.
+  const HOLD = { l: 0, r: 0, f: 0, b: 0, sl: 0, sr: 0 };
+  const holdRamp = (h, T, base) => {
+    const u = Math.min(1, h / T);
+    return base + (1 - base) * u * u * (3 - 2 * u);   // smoothstep ease-in
+  };
+  function updatePlayerInput(dt) {
     const p = G.player;
     if (!p || p.dead || G.state !== 'play' || (G.paused && !G.online) || G.chatOpen) {
       if (p && (G.chatOpen || G.paused)) { p.ctl.turn = 0; p.ctl.thrust = 0; p.ctl.strafe = 0; p.ctl.gun = false; p.ctl.bomb = false; }
+      HOLD.l = HOLD.r = HOLD.f = HOLD.b = HOLD.sl = HOLD.sr = 0;
       return;
     }
     const c = p.ctl;
+    // hold timers: how long each control has been engaged
+    const L = keys.ArrowLeft, R = keys.ArrowRight;
+    const fw = keys.ArrowUp || keys.KeyW, bk = keys.ArrowDown || keys.KeyS;
+    HOLD.l = L ? HOLD.l + dt : 0;
+    HOLD.r = R ? HOLD.r + dt : 0;
+    HOLD.f = fw ? HOLD.f + dt : 0;
+    HOLD.b = bk ? HOLD.b + dt : 0;
+    HOLD.sl = keys.KeyA ? HOLD.sl + dt : 0;
+    HOLD.sr = keys.KeyD ? HOLD.sr + dt : 0;
+    // agility from the hull's own turn rate: snappy ships ramp up faster
+    const ag = clamp((p.t.turn - 2.2) / 2, 0, 1);
+    const tT = 0.26 - 0.12 * ag;    // time to full turn authority
+    const hT = 0.18 - 0.08 * ag;    // time to full thrust
     // arrows rotate + thrust (classic); A/D strafe sideways; W/S also thrust
-    c.turn = (keys.ArrowLeft ? -1 : 0) + (keys.ArrowRight ? 1 : 0);
-    c.thrust = keys.ArrowUp || keys.KeyW ? 1 : keys.ArrowDown || keys.KeyS ? -1 : 0;
-    c.strafe = (keys.KeyA ? -1 : 0) + (keys.KeyD ? 1 : 0);
+    c.turn = (L ? -holdRamp(HOLD.l, tT, 0.32) : 0) + (R ? holdRamp(HOLD.r, tT, 0.32) : 0);
+    c.thrust = fw ? holdRamp(HOLD.f, hT, 0.55) : bk ? -holdRamp(HOLD.b, hT, 0.55) : 0;
+    c.strafe = (keys.KeyA ? -holdRamp(HOLD.sl, hT, 0.55) : 0) + (keys.KeyD ? holdRamp(HOLD.sr, hT, 0.55) : 0);
     c.gun = !!(keys.Space || keys.ControlLeft || keys.ControlRight);
     c.bomb = !!(keys.Tab || keys.ShiftLeft || keys.ShiftRight || keys.KeyB);
     // virtual stick: point the nub, the ship turns and burns that way
@@ -3266,8 +3292,10 @@
     const dt = Math.min(0.1, (ts - lastT) / 1000 || 0);
     lastT = ts;
     acc += dt;
-    updatePlayerInput();
-    while (acc >= STEP) { update(STEP); acc -= STEP; }
+    // input is sampled per fixed sim step, not per rendered frame — hold
+    // ramps stay identical at any frame rate, and taps can't be amplified
+    // by catch-up steps on a slow frame
+    while (acc >= STEP) { updatePlayerInput(STEP); update(STEP); acc -= STEP; }
     render();
   }
 
@@ -3334,7 +3362,7 @@
     SFX.musBus.gain.value = save;
     return 'scheduled ' + n + ' steps clean, sections visited: ' + [...visited].sort().join(',');
   }
-  GLOBAL.__interstellar = { G, SIM, boot, startSolo, update, render, keys, handleNet, netConnect, STEP, MUS, musTest };
+  GLOBAL.__interstellar = { G, SIM, boot, startSolo, update, render, keys, handleNet, netConnect, STEP, MUS, musTest, updatePlayerInput };
 
   if (GLOBAL.document && GLOBAL.document.getElementById) boot();
 })();

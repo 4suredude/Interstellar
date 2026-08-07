@@ -125,6 +125,13 @@ A new generation of hulls joins the fleet — each with a mechanic all its own:
 - **Inertial flight with authority** — momentum rules mid-fight, but each
   hull has coast damping: hands off the keys and a Dagger settles crisply
   while a Titan drifts on. Precision when you want it, physics when you don't.
+- **Precision controls** — keys don't slam straight to full authority: a
+  *tap* nudges your nose a degree or two or eases you forward for fine
+  aiming, while a *hold* ramps to the hull's full turn rate and thrust in
+  a fraction of a second. Agile hulls respond near-instantly; heavies ramp
+  slower, so the Titan feels massive and the Dagger feels telepathic.
+  Input is sampled at the fixed simulation rate, so handling is identical
+  at any frame rate.
 - **Energy warfare** — one bar is shields *and* ammo; a hit that lands with
   nothing left kills you.
 - **Leveled weapons** — L1–L3 color-coded bullets and bombs with splash and
