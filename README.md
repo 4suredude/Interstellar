@@ -159,15 +159,21 @@ A new generation of hulls joins the fleet — each with a mechanic all its own:
 - **All audio is synthesized live — zero asset files.** Sound effects (guns,
   bombs, explosions, repels, blinks, bounces, low-energy warnings) are
   WebAudio-generated with distance attenuation, and the soundtrack is
-  **generative rave electronica** sequenced live at 126 BPM — not a loop
-  but a 64-bar arrangement that keeps moving: an ambient opening of detuned
-  pads and space echo, a climbing eight-bar build with accelerating snare
-  rolls and a four-bar riser, then a full-energy **drop** — punchy
-  four-on-the-floor kick, rolling offbeat bass, a resonant acid lead, rave
-  stabs, claps and open hats — into a weightless breakdown and back up.
-  Chord progressions and arp patterns rotate every pass (~6 minutes before
-  it repeats), glued by a bus compressor. Toggle it with `N` (remembered
-  between sessions), mute everything with `M`.
+  **adaptive generative rave electronica** at 126 BPM: a music director
+  reads the fight — enemy proximity, hits, kills — into a live intensity
+  and steers the arrangement bar by bar. Cruise empty space and it stays
+  ambient (detuned pads, glass bells whispering the theme, space echo);
+  contact closes in and an eight-bar build starts climbing — accelerating
+  snare rolls, a four-bar riser, the filter opening; then the **drop**:
+  punchy four-on-the-floor kick, rolling sub-layered bass with passing
+  tones, shaker groove with swing, claps, ghost snares, tom fills, and
+  eight-bar turns alternating between a resonant acid lead with rave stabs
+  and a **supersaw anthem playing the theme** over rave piano jabs. While
+  the fight rages the drop keeps extending itself; when it's over, a
+  weightless breakdown. An ambush can cut a quiet passage straight into
+  the build. Chord progressions rotate on every ride up, glued by a bus
+  compressor. Toggle with `N` (remembered between sessions), mute all
+  with `M`.
 - AI pilots with target leading, wall avoidance, dodging, fleeing, repel/burst
   usage, and prize hunting — the zone fights on with or without you (watch the
   attract mode behind the title screen).
