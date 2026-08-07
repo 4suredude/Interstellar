@@ -46,29 +46,38 @@
     active: false,          // flips true on first real touch
     stick: null,            // {id, x0, y0, dx, dy}
     fire: false, bomb: false,
+    press: {},              // touch identifier -> button key (persistent —
+                            // T.btns is rebuilt every frame, so held state
+                            // must never live on the button objects)
     btns: [],               // laid out each frame
     ui: {},                 // tappable rects published by the draw pass
   };
+  // Touch buttons scale with the screen but FLOOR at a real finger size —
+  // shrinking targets on a phone is exactly backwards
+  function touchScale() { return Math.max(0.6, Math.min(1, Math.min(vw, vh) / 640)); }
   function layoutTouchButtons() {
     const p = G.player;
-    const sc = Math.min(1, vw / 900) * (vw < 500 ? 0.85 : 1);
+    const sc = touchScale();
     const R = 44 * sc, r2 = 30 * sc;
+    // bottom anchor respects the device safe area (home indicator) plus a
+    // small margin so every button circle is fully on screen
+    const bb = vh - safeBottom - 8;
     T.btns = [
-      { key: 'fire', label: 'FIRE', x: vw - 74 * sc, y: vh - 86 * sc, r: R, hold: true },
-      { key: 'bomb', label: 'BOMB', x: vw - 168 * sc, y: vh - 150 * sc, r: 34 * sc, hold: true },
-      { key: 'repel', label: 'REP' + (p ? ' ' + p.repels : ''), x: vw - 62 * sc, y: vh - 196 * sc, r: r2 },
-      { key: 'burst', label: 'BST' + (p ? ' ' + p.bursts : ''), x: vw - 178 * sc, y: vh - 62 * sc, r: r2 },
+      { key: 'fire', label: 'FIRE', x: vw - 74 * sc, y: bb - 86 * sc, r: R, hold: true },
+      { key: 'bomb', label: 'BOMB', x: vw - 168 * sc, y: bb - 150 * sc, r: 34 * sc, hold: true },
+      { key: 'repel', label: 'REP' + (p ? ' ' + p.repels : ''), x: vw - 62 * sc, y: bb - 196 * sc, r: r2 },
+      { key: 'burst', label: 'BST' + (p ? ' ' + p.bursts : ''), x: vw - 178 * sc, y: bb - 62 * sc, r: r2 },
       {
         key: 'spec',
         label: p && p.t.blink ? 'BLNK' : 'RKT' + (p ? ' ' + p.rockets : ''),
-        x: vw - 258 * sc, y: vh - 96 * sc, r: 27 * sc,
+        x: vw - 258 * sc, y: bb - 96 * sc, r: 27 * sc,
       },
-      { key: 'pause', label: 'II', x: vw - 24, y: 64, r: 16 },
+      { key: 'pause', label: 'II', x: vw - 28, y: 64, r: 16 },
     ];
     if (G.online) T.btns.push({ key: 'chat', label: 'CHAT', x: 30, y: vh * 0.4, r: 24 * sc });
     if (G.player && !G.player.t.blink && G.player.team &&
         G.W.ships.some(s => s !== G.player && !s.dead && s.team === G.player.team && s.type === 'comet')) {
-      T.btns.push({ key: 'warp', label: 'WARP', x: vw - 258 * sc, y: vh - 170 * sc, r: 25 * sc });
+      T.btns.push({ key: 'warp', label: 'WARP', x: vw - 258 * sc, y: bb - 170 * sc, r: 25 * sc });
     }
   }
   function touchPos(t) {
@@ -149,7 +158,9 @@
         for (const b of T.btns) {
           if (Math.hypot(p.x - b.x, p.y - b.y) <= b.r + 8) { hit = b; break; }
         }
-        if (hit) { hit.id = t.identifier; pressTouchButton(hit.key); continue; }
+        // held state is tracked by touch identifier in T.press — T.btns is
+        // rebuilt every frame, so nothing durable may live on the buttons
+        if (hit) { T.press[t.identifier] = hit.key; pressTouchButton(hit.key); continue; }
         if (p.x < vw * 0.48 && G.player && !G.player.dead) {
           T.stick = { id: t.identifier, x0: p.x, y0: p.y, dx: 0, dy: 0 };
           continue;
@@ -174,13 +185,17 @@
     e.preventDefault();
     for (const t of e.changedTouches) {
       if (T.stick && t.identifier === T.stick.id) T.stick = null;
-      for (const b of T.btns) {
-        if (b.id === t.identifier) {
-          b.id = null;
-          if (b.key === 'fire') T.fire = false;
-          if (b.key === 'bomb') T.bomb = false;
-        }
+      const key = T.press[t.identifier];
+      if (key !== undefined) {
+        delete T.press[t.identifier];
+        if (key === 'fire') T.fire = false;
+        if (key === 'bomb') T.bomb = false;
       }
+    }
+    // belt and braces: no fingers on the glass means nothing can be held —
+    // a missed identifier must never leave the guns wedged open
+    if (e.touches.length === 0) {
+      T.fire = false; T.bomb = false; T.stick = null; T.press = {};
     }
   }
   // hidden input summons the OS keyboard for callsign entry
@@ -2735,9 +2750,17 @@
   }
 
   function drawMessages() {
-    const max = 8;
+    const max = T.active ? 5 : 8;
     const start = Math.max(0, G.msgs.length - max);
-    let y = vh - (G.chatOpen ? 76 : 44);
+    // on touch, keep the feed clear of the steer hint and clip it so long
+    // lines never run underneath the weapon buttons
+    let y = T.active ? vh - 96 : vh - (G.chatOpen ? 76 : 44);
+    ctx.save();
+    if (T.active) {
+      ctx.beginPath();
+      ctx.rect(0, 0, vw - 235 * touchScale(), vh);
+      ctx.clip();
+    }
     for (let i = G.msgs.length - 1; i >= start; i--) {
       const m = G.msgs[i];
       const a = m.t > 7 ? clamp(1 - (m.t - 7) / 2, 0, 1) : 1;
@@ -2746,6 +2769,7 @@
       ctx.globalAlpha = 1;
       y -= 18;
     }
+    ctx.restore();
   }
 
   // ---------------------------------------------------------------- overlays
@@ -3265,10 +3289,24 @@
   }
 
   // ---------------------------------------------------------------- boot
+  let safeBottom = 0;   // device safe-area inset (e.g. iPhone home indicator)
   function resize() {
-    vw = GLOBAL.innerWidth || 1280;
-    vh = GLOBAL.innerHeight || 720;
+    // visualViewport is the REAL visible area on mobile — innerHeight can
+    // include space hidden behind the browser's URL bar, which used to
+    // push the bottom touch buttons off screen
+    const vv = GLOBAL.visualViewport;
+    vw = Math.round((vv && vv.width) || GLOBAL.innerWidth || 1280);
+    vh = Math.round((vv && vv.height) || GLOBAL.innerHeight || 720);
     dpr = Math.min(2, GLOBAL.devicePixelRatio || 1);
+    try {
+      const doc = GLOBAL.document;
+      const probe = doc.createElement('div');
+      probe.style.cssText = 'position:fixed;left:0;bottom:0;width:1px;height:env(safe-area-inset-bottom,0px);pointer-events:none;visibility:hidden';
+      doc.body.appendChild(probe);
+      const h = probe.getBoundingClientRect().height;
+      probe.remove();
+      safeBottom = typeof h === 'number' && isFinite(h) ? h : 0;
+    } catch (e) { safeBottom = 0; }
     canvas.width = Math.round(vw * dpr);
     canvas.height = Math.round(vh * dpr);
     const doc = GLOBAL.document;
@@ -3308,6 +3346,12 @@
     newSoloWorld();
     G.state = 'title';
     GLOBAL.addEventListener('resize', resize);
+    // mobile: URL bar collapse / OS keyboard change the visible area without
+    // firing window resize — track the visual viewport directly
+    if (GLOBAL.visualViewport) {
+      GLOBAL.visualViewport.addEventListener('resize', resize);
+      GLOBAL.visualViewport.addEventListener('scroll', resize);
+    }
     GLOBAL.addEventListener('keydown', onKeyDown);
     GLOBAL.addEventListener('keyup', onKeyUp);
     GLOBAL.addEventListener('blur', () => {
@@ -3362,7 +3406,20 @@
     SFX.musBus.gain.value = save;
     return 'scheduled ' + n + ' steps clean, sections visited: ' + [...visited].sort().join(',');
   }
-  GLOBAL.__interstellar = { G, SIM, boot, startSolo, update, render, keys, handleNet, netConnect, STEP, MUS, musTest, updatePlayerInput };
+  // Ttest: lay out the touch buttons and report their bounds vs the
+  // viewport, plus live held state — for automated mobile verification
+  function Ttest() {
+    layoutTouchButtons();
+    const bad = [];
+    let fire = [0, 0];
+    for (const b of T.btns) {
+      if (b.key === 'fire') fire = [b.x, b.y];
+      if (b.x - b.r < 0 || b.x + b.r > vw || b.y - b.r < 0 || b.y + b.r > vh)
+        bad.push(b.key + '@' + Math.round(b.x) + ',' + Math.round(b.y) + ' r' + Math.round(b.r));
+    }
+    return { ok: bad.length === 0, bad, fire, fireHeld: T.fire, bombHeld: T.bomb, vw, vh };
+  }
+  GLOBAL.__interstellar = { G, SIM, boot, startSolo, update, render, keys, handleNet, netConnect, STEP, MUS, musTest, updatePlayerInput, Ttest };
 
   if (GLOBAL.document && GLOBAL.document.getElementById) boot();
 })();

@@ -2,12 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>Interstellar — top-down space combat</title>
 <style>
   html,body{margin:0;padding:0;height:100%;background:#04060d;overflow:hidden;
     -webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
-  canvas{display:block;width:100vw;height:100vh;cursor:crosshair;touch-action:none}
+  /* 100dvh tracks the REAL visible height on mobile (URL bar collapse);
+     plain 100vh would push bottom-anchored touch buttons off screen */
+  canvas{display:block;position:fixed;top:0;left:0;width:100vw;height:100vh;height:100dvh;
+    cursor:crosshair;touch-action:none}
   #err{position:fixed;top:12px;left:12px;right:12px;z-index:9;display:none;
     color:#ffb0a8;background:#1c0a0a;border:1px solid #a04438;border-radius:8px;
     padding:14px 18px;font:13px/1.5 monospace;white-space:pre-wrap}
