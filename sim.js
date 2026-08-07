@@ -48,7 +48,7 @@
     'vanguard', 'aegis', 'reaper', 'phantom'];
   const SHIP_TYPES = {
     corsair: {
-      label: 'Corsair', hue: 192,
+      label: 'Corsair', damp: 0.28, hue: 192,
       desc: 'The duelist. Heavy single shots — one clean hit swings a fight.',
       maxEnergy: 1500, recharge: 105, thrust: 235, maxSpeed: 350, turn: 3.4,
       radius: 11, bounce: 0.6,
@@ -60,7 +60,7 @@
       cockpit: [0.38, 0, 0.2, 0.13], engines: [[-0.4, 0]],
     },
     meteor: {
-      label: 'Meteor', hue: 18, proxStart: 1,
+      label: 'Meteor', damp: 0.22, hue: 18, proxStart: 1,
       desc: 'Bomber. Factory proximity fuses — its splash artillery detonates near hulls.',
       maxEnergy: 1700, recharge: 95, thrust: 200, maxSpeed: 310, turn: 3.0,
       radius: 12, bounce: 0.5,
@@ -72,7 +72,7 @@
       cockpit: [0.32, 0, 0.19, 0.13], engines: [[-0.62, 0.3], [-0.62, -0.3]],
     },
     hornet: {
-      label: 'Hornet', hue: 130, radarStealth: true,
+      label: 'Hornet', damp: 0.3, hue: 130, radarStealth: true,
       desc: 'Bullet hose. Relentless fire, monster recharge — and it ghosts off enemy radar.',
       maxEnergy: 1400, recharge: 135, thrust: 215, maxSpeed: 330, turn: 3.6,
       radius: 11, bounce: 0.55,
@@ -84,7 +84,7 @@
       cockpit: [0.3, 0, 0.17, 0.14], engines: [[-0.55, 0.36], [-0.55, -0.36]],
     },
     titan: {
-      label: 'Titan', hue: 355,
+      label: 'Titan', damp: 0.12, hue: 355,
       desc: 'The dreadnought. Glacial, colossal energy, level-3 bombs that erase rooms.',
       maxEnergy: 2600, recharge: 70, thrust: 125, maxSpeed: 240, turn: 2.1,
       radius: 15, bounce: 0.4,
@@ -96,7 +96,7 @@
       cockpit: [0.35, 0, 0.24, 0.19], engines: [[-0.92, 0.28], [-0.92, -0.28]],
     },
     comet: {
-      label: 'Comet', hue: 282, dualGuns: true, dualShotMul: 0.62,
+      label: 'Comet', damp: 0.45, hue: 282, dualGuns: true, dualShotMul: 0.62,
       desc: 'Interceptor. Twin linked cannons, fastest hull in the zone — hit and run.',
       maxEnergy: 1250, recharge: 120, thrust: 285, maxSpeed: 410, turn: 4.3,
       radius: 10, bounce: 0.65,
@@ -108,7 +108,7 @@
       cockpit: [0.32, 0, 0.18, 0.11], engines: [[-0.55, 0]],
     },
     dagger: {
-      label: 'Dagger', hue: 55,
+      label: 'Dagger', damp: 0.5, hue: 55,
       desc: 'Assassin. Tiny, half-invisible, off enemy radar. Fragile as glass.',
       maxEnergy: 1000, recharge: 130, thrust: 300, maxSpeed: 430, turn: 4.8,
       radius: 8, bounce: 0.7, stealth: true,
@@ -120,7 +120,7 @@
       cockpit: [0.25, 0, 0.15, 0.1], engines: [[-0.55, 0]],
     },
     paladin: {
-      label: 'Paladin', hue: 210, bombBounce: 2,
+      label: 'Paladin', damp: 0.25, hue: 210, bombBounce: 2,
       desc: 'The all-rounder. Dependable guns and bombs that ricochet down corridors.',
       maxEnergy: 1600, recharge: 115, thrust: 225, maxSpeed: 340, turn: 3.2,
       radius: 12, bounce: 0.55,
@@ -132,7 +132,7 @@
       cockpit: [0.28, 0, 0.19, 0.15], engines: [[-0.75, 0]],
     },
     warden: {
-      label: 'Warden', hue: 165,
+      label: 'Warden', damp: 0.28, hue: 165,
       desc: 'Support hunter. Carries a rack of self-restocking repels and mean bombs.',
       maxEnergy: 1450, recharge: 110, thrust: 240, maxSpeed: 345, turn: 3.5,
       radius: 11, bounce: 0.6, repelStart: 3, repelCap: 4, repelRegen: 18,
@@ -145,7 +145,7 @@
     },
     // ---- NOVA class: the new generation ----
     vanguard: {
-      label: 'Vanguard', hue: 45, cls: 'nova',
+      label: 'Vanguard', damp: 0.28, hue: 45, cls: 'nova',
       desc: 'Nova-class gunship. Ships factory MultiFire — a wall of lead from spawn.',
       maxEnergy: 1450, recharge: 110, thrust: 240, maxSpeed: 345, turn: 3.5,
       radius: 11, bounce: 0.6, startMulti: true,
@@ -157,7 +157,7 @@
       cockpit: [0.35, 0, 0.18, 0.11], engines: [[-0.75, 0.18], [-0.75, -0.18]],
     },
     aegis: {
-      label: 'Aegis', hue: 215, cls: 'nova',
+      label: 'Aegis', damp: 0.15, hue: 215, cls: 'nova',
       desc: 'Nova-class bastion. Composite plating shrugs off a quarter of all damage.',
       maxEnergy: 1900, recharge: 100, thrust: 190, maxSpeed: 300, turn: 2.8,
       radius: 13, bounce: 0.45, armor: 0.72, repelStart: 2,
@@ -169,7 +169,7 @@
       cockpit: [0.2, 0, 0.22, 0.17], engines: [[-0.85, 0.3], [-0.85, -0.3]],
     },
     reaper: {
-      label: 'Reaper', hue: 275, cls: 'nova',
+      label: 'Reaper', damp: 0.3, hue: 275, cls: 'nova',
       desc: 'Nova-class leech. Every hit you land feeds stolen energy back to your banks.',
       maxEnergy: 1350, recharge: 85, thrust: 235, maxSpeed: 355, turn: 3.7,
       radius: 11, bounce: 0.6, leech: 0.3,
@@ -181,7 +181,7 @@
       cockpit: [0.3, 0, 0.16, 0.11], engines: [[-0.55, 0]],
     },
     phantom: {
-      label: 'Phantom', hue: 320, cls: 'nova',
+      label: 'Phantom', damp: 0.5, hue: 320, cls: 'nova',
       desc: 'Nova-class blink-fighter. R warps you 240m forward — straight through walls.',
       maxEnergy: 1200, recharge: 125, thrust: 260, maxSpeed: 390, turn: 4.4,
       radius: 10, bounce: 0.65, blink: true,
@@ -468,7 +468,7 @@
     const out = [];
     for (let i = 0; i < n; i++) {
       const name = names.length ? names.splice(irand(names.length), 1)[0] : 'Bot' + i;
-      const s = makeShip(W, pick(SHIP_ORDER), 'bot', name, HUES[i % HUES.length]);
+      const s = makeShip(W, pick(SHIP_ORDER), 'bot', name);   // ship-identity hue
       spawnShip(W, s);
       out.push(s);
     }
@@ -906,6 +906,13 @@
       const sp2 = power * 0.75 * clamp(c.strafe, -1, 1);
       s.vx += Math.cos(s.angle + Math.PI / 2) * sp2 * dt;
       s.vy += Math.sin(s.angle + Math.PI / 2) * sp2 * dt;
+    }
+    // coast damping: hands-off means the ship settles instead of drifting
+    // forever — agile hulls (Dagger, Comet, Phantom) stop crisply, heavies
+    // (Titan, Aegis) keep their momentum. Inertia still rules mid-fight.
+    if (th === 0 && !c.strafe && s.rocketT <= 0) {
+      const kd = 1 - (s.t.damp == null ? 0.25 : s.t.damp) * dt;
+      s.vx *= kd; s.vy *= kd;
     }
     const sp = hyp(s.vx, s.vy);
     if (sp > maxSp) {

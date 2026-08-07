@@ -743,7 +743,7 @@
 
   // ---------------------------------------------------------------- world setup
   function newSoloWorld() {
-    G.W = SIM.createWorld({ seed: (Math.random() * 1e9) | 0, spawnPrizes: true });
+    G.W = SIM.createWorld({ seed: (Math.random() * 1e9) | 0, spawnPrizes: true, zoneWorld: true });
     prerenderMap();
     SIM.addBots(G.W, 10);
     for (let i = 0; i < 14; i++) {
@@ -1633,11 +1633,24 @@
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(s.x, s.y);
-    // faint team-color halo so ships read against the void (kept subtle —
-    // the sprite's own lighting carries the look now)
+    // hulls keep their ship-identity color; TEAM reads from the halo + ring
+    const rel = s.team && G.player && G.player.team
+      ? (s.team === G.player.team ? 'ally' : 'foe') : null;
+    const haloHue = rel === 'ally' ? 210 : rel === 'foe' ? 5 : s.hue;
     ctx.globalCompositeOperation = 'lighter';
-    drawGlow(0, 0, 50, s.hue, stealthy ? 0.06 : 0.14);
+    drawGlow(0, 0, 52, haloHue, stealthy ? 0.06 : rel ? 0.2 : 0.14);
     ctx.globalCompositeOperation = 'source-over';
+    if (rel && !stealthy) {
+      // team ring under the hull: blue = wing, red = target
+      ctx.strokeStyle = rel === 'ally' ? 'rgba(110,175,255,0.55)' : 'rgba(255,110,90,0.55)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 5]);
+      ctx.lineDashOffset = G.time * (rel === 'ally' ? 8 : -8);
+      ctx.beginPath();
+      ctx.arc(0, 0, s.t.radius + 7, 0, TAU);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
 
     // engine flames under the hull, aligned to the quantized frame
     const th = s.remote ? s.netTh : (s.ctl.thrust > 0 || s.rocketT > 0 ? 1 : 0);
@@ -2084,7 +2097,7 @@
     ctx.restore();
     const blink = Math.sin(G.time * 4) > -0.3;
     if (blink) txt('ENTER — SQUAD BATTLE  3v3', vw / 2, vh / 2 + 62, 20, '#cff', 'center', 700);
-    txt('1 duel the Ace   ·   2 squad battle   ·   3 free-for-all   ·   4 hold the core', vw / 2, vh / 2 + 92, 14, '#9bc', 'center', 600);
+    txt('1 duel the Ace   ·   2 squad battle   ·   3 enter the zone   ·   4 hold the core', vw / 2, vh / 2 + 92, 14, '#9bc', 'center', 600);
     txt('O — online multiplayer', vw / 2, vh / 2 + 118, 16, '#8fd4a8', 'center', 700);
     txt('best score ' + G.best + '   ·   duel record ' + G.duelW + 'W – ' + G.duelL + 'L', vw / 2, vh / 2 + 146, 13, '#678', 'center');
     txt('M mute  ·  N music  ·  F fullscreen', vw / 2, vh - 24, 12, '#567', 'center');
@@ -2106,7 +2119,7 @@
       : G.pendingMode === 'duel' ? 'DUEL — you vs the Ace, first to 5'
       : G.pendingMode === 'squad' ? 'SQUAD BATTLE — 3v3, first to 15'
       : G.pendingMode === 'core' ? 'HOLD THE CORE — 3v3, first to 20'
-      : 'FREE-FOR-ALL SANDBOX';
+      : 'THE ZONE — drop into the living world, no match, no clock';
     txt(modeLabel, vw / 2, 96, 13, '#fd8', 'center', 700);
     txt('◄ ► select   ·   ENTER launch   ·   ESC back', vw / 2, 116, 12, '#789', 'center');
 
@@ -2260,7 +2273,6 @@
   }
 
   // ---------------------------------------------------------------- flow
-  const TEAM_HUES = { 1: [200, 212, 190, 224], 2: [10, 24, 0, 34] };
   function startSolo(shipKey) {
     const mode = G.pendingMode || 'ffa';
     G.mode = mode;
@@ -2279,10 +2291,10 @@
           : { x: C + 430, y: C, angle: Math.PI },
       });
       prerenderMap();
-      const ace = SIM.makeShip(G.W, SIM.pick(['corsair', 'paladin', 'reaper', 'comet']), 'bot', 'Ace', TEAM_HUES[2][0], 2);
+      const ace = SIM.makeShip(G.W, SIM.pick(['corsair', 'paladin', 'reaper', 'comet']), 'bot', 'Ace', null, 2);
       ace.ai.skill = 0.92;
       SIM.spawnShip(G.W, ace);
-      s = SIM.makeShip(G.W, shipKey, 'local', 'You', TEAM_HUES[1][0], 1);
+      s = SIM.makeShip(G.W, shipKey, 'local', 'You', null, 1);
       SIM.spawnShip(G.W, s);
       G.match = { mode, target: 5, a: 0, b: 0, over: false };
       banner('DUEL — FIRST TO 5', 'the Ace shows no mercy', 3.2);
@@ -2302,16 +2314,16 @@
       const names = SIM.BOT_NAMES.slice();
       const takeName = () => names.splice((Math.random() * names.length) | 0, 1)[0];
       for (let i = 0; i < 2; i++) {
-        const ally = SIM.makeShip(G.W, SIM.pick(SIM.SHIP_ORDER), 'bot', takeName(), TEAM_HUES[1][i + 1], 1);
+        const ally = SIM.makeShip(G.W, SIM.pick(SIM.SHIP_ORDER), 'bot', takeName(), null, 1);
         ally.ai.skill = 0.62;
         SIM.spawnShip(G.W, ally);
       }
       for (let i = 0; i < 3; i++) {
-        const foe = SIM.makeShip(G.W, SIM.pick(SIM.SHIP_ORDER), 'bot', takeName(), TEAM_HUES[2][i], 2);
+        const foe = SIM.makeShip(G.W, SIM.pick(SIM.SHIP_ORDER), 'bot', takeName(), null, 2);
         foe.ai.skill = 0.62;
         SIM.spawnShip(G.W, foe);
       }
-      s = SIM.makeShip(G.W, shipKey, 'local', 'You', TEAM_HUES[1][0], 1);
+      s = SIM.makeShip(G.W, shipKey, 'local', 'You', null, 1);
       SIM.spawnShip(G.W, s);
       if (mode === 'core') {
         G.match = { mode: 'core', target: 20, a: 0, b: 0, over: false, coreAcc: 0 };
@@ -2324,11 +2336,13 @@
         say('Squad battle: blue vs red. No friendly fire.', '#8df');
       }
     } else {
+      // THE ZONE: drop into the persistent world that's been fighting since
+      // boot — same bots, same scores, still there when you leave and return
       G.match = null;
-      newSoloWorld();
-      s = SIM.makeShip(G.W, shipKey, 'local', 'You', 190);
+      if (!G.W || !G.W.opts.zoneWorld) newSoloWorld();
+      s = SIM.makeShip(G.W, shipKey, 'local', 'You');
       SIM.spawnShip(G.W, s);
-      say('Welcome to Interstellar — good luck, pilot.', '#8df');
+      say('Welcome to the zone — it was here before you, it stays after.', '#8df');
       say('Collect greens. Guard your energy. Everything costs it.', '#8df');
     }
     if (mode !== 'ffa') {
@@ -2357,7 +2371,8 @@
     G.chatOpen = false;
     G.match = null;
     G.banner = null;
-    newSoloWorld(); // fresh attract-mode zone behind the title
+    // the zone world persists across visits; match worlds are discarded
+    if (!G.W || !G.W.opts.zoneWorld) newSoloWorld();
     G.state = 'title';
     G.paused = false;
   }

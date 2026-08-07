@@ -205,7 +205,7 @@ httpServer.on('upgrade', (req, sock) => {
 let SEED = (Math.random() * 1e9) | 0;
 let MAPSTYLE = (process.env.MAP || 'nexus').toLowerCase();
 const TEAMMODE = MODE === 'teams' || MODE === 'core';
-const TEAM_HUES = { 1: [200, 212, 190, 224], 2: [10, 24, 0, 34] };
+// ships keep their type-identity hue; team reads from halo/ring/nameplates
 let SIDES = 0; // flips each round so neither team owns a flank
 const worldOpts = { spawnPrizes: true, mapStyle: MAPSTYLE };
 if (TEAMMODE) {
@@ -226,7 +226,6 @@ const bots = SIM.addBots(W, BOTS);
 if (TEAMMODE) {
   bots.forEach((b, i) => {
     b.team = 1 + (i % 2);
-    b.hue = TEAM_HUES[b.team][(i >> 1) % TEAM_HUES[b.team].length];
     b.ai.skill = 0.62;
   });
 }
@@ -377,9 +376,6 @@ function rebuildWorld(style) {
   broadcast({ t: 'newmap', seed: SEED, style });
   sysAll('Warped to a new ' + style + ' sector.');
 }
-const HUE_POOL = [190, 8, 35, 55, 110, 150, 210, 240, 262, 300, 330, 20, 90, 180, 315];
-let hueIdx = 0;
-const teamHueIdx = { 1: 0, 2: 0 };
 const tk = { 1: 0, 2: 0 };
 
 const rk = new Map();               // per-round kills, for MVP
@@ -525,10 +521,8 @@ function onMessage(cl, msg) {
       if (findClientByName(cl.name)) cl.name = cl.name.slice(0, 11) + '.' + ((Math.random() * 90 + 10) | 0);
       cl.pilot = pilot(cl.name);
       const team = pickTeam();
-      const hue = team
-        ? TEAM_HUES[team][teamHueIdx[team]++ % TEAM_HUES[team].length]
-        : HUE_POOL[hueIdx++ % HUE_POOL.length];
-      const ghost = SIM.makeShip(W, msg.ship, 'remote', cl.name, hue, team);
+      const ghost = SIM.makeShip(W, msg.ship, 'remote', cl.name, null, team);
+      const hue = ghost.hue;   // ship-identity color
       ghost.elo = cl.pilot.elo;
       cl.ship = ghost;
       cl.id = ghost.id;

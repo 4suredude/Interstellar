@@ -17,8 +17,8 @@ multikill callouts, and matches short enough to always want one more.
 | Mode | What it is |
 | --- | --- |
 | **Duel** (`1` on the title screen) | You vs **the Ace** — a high-skill AI duelist. First to 5. Respawns are near-instant, facing each other across the central arena. Your lifetime W–L record is kept. |
-| **Squad Battle** (`2` or `Enter`) | 3v3 team dogfight vs bots — blue vs red, no friendly fire, anchored team spawns, wingmen that hunt with you. First to 15. |
-| **Free-for-all** (`3`) | The open sandbox: 10 AI pilots, every ship for itself. |
+| **Squad Battle** (`2` or `Enter`) | 3v3 team dogfight vs bots — blue vs red, no friendly fire, anchored team spawns, wingmen that hunt with you. First to 15. Every ship keeps its own identity color — team reads from the blue/red halo ring, nameplates, and radar. |
+| **The Zone** (`3`) | Drop into the persistent living world — no match, no clock. The zone fights on while you're at the title screen and remembers everything when you return. |
 | **Hold the Core** (`4`) | 3v3 objective mode: hold the glowing center ring **alone** for 3 seconds to score a point. First to 20. Forces the fight into one shared arena. |
 | **Online** (`O`) | Real multiplayer with rounds, MVPs, side swaps, an **Elo duel ladder**, and persistent pilot stats. `MODE=teams` (default), `MODE=core`, or `MODE=ffa`. |
 
@@ -110,7 +110,9 @@ A new generation of hulls joins the fleet — each with a mechanic all its own:
 
 ## The combat system
 
-- **Inertial flight** — no friction, no brakes; ships ricochet off walls.
+- **Inertial flight with authority** — momentum rules mid-fight, but each
+  hull has coast damping: hands off the keys and a Dagger settles crisply
+  while a Titan drifts on. Precision when you want it, physics when you don't.
 - **Energy warfare** — one bar is shields *and* ammo; a hit that lands with
   nothing left kills you.
 - **Leveled weapons** — L1–L3 color-coded bullets and bombs with splash and

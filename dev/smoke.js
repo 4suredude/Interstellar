@@ -177,6 +177,18 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     sf.ctl.strafe = 1;
     for (let i = 0; i < 30; i++) SIM.updateWorld(Ws2, SIM.STEP);
     assert(sf.vy > 40 && Math.abs(sf.vx) < 20, 'strafe pushes sideways (vy=' + sf.vy.toFixed(0) + ')');
+    sf.ctl.strafe = 0;
+
+    // coast damping: hands-off, a Dagger settles fast, a Titan drifts on
+    const dg = SIM.makeShip(Ws2, 'dagger', 'local', 'D', 55, 0);
+    const tn = SIM.makeShip(Ws2, 'titan', 'local', 'T', 355, 0);
+    const spd = SIM.randClearPoint(Ws2);
+    for (const sh of [dg, tn]) { sh.x = spd.x; sh.y = spd.y; sh.vx = 200; sh.vy = 0; sh.safe = 99; }
+    sf.safe = 99; sf.vx = 0; sf.vy = 0;
+    for (let i = 0; i < 120; i++) SIM.updateWorld(Ws2, SIM.STEP);   // 2s hands-off
+    assert(dg.vx < 80 && tn.vx > 150 && dg.vx < tn.vx * 0.6,
+      'agile hulls settle, heavies drift (dagger ' + dg.vx.toFixed(0) + ' vs titan ' + tn.vx.toFixed(0) + ')');
+    assert(SIM.SHIP_TYPES.dagger.damp > SIM.SHIP_TYPES.titan.damp, 'damp values per hull');
   }
 
   // ghost interpolation with a jitter buffer
@@ -331,10 +343,9 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     update(STEP);
   }
   assert(G.match.a + G.match.b > 0 || !G.match.over, 'duel runs (score ' + G.match.a + '-' + G.match.b + ')');
-  // force match end and rematch path
-  G.match.a = 5; api.G.match.over = false;
-  const cm = G.match; cm.over = false; cm.a = 5;
-  // trigger checkMatchEnd via a fake kill event path: directly kill the ace
+  // force match end and rematch path (revive the ace first if mid-respawn)
+  const cm = G.match; cm.over = false; cm.a = 4; cm.b = 0;
+  if (ace.dead) { ace.respawn = 0; update(STEP); }
   ace.energy = 1; ace.safe = 0;
   SIM.damageShip(G.W, ace, 99999, dp);
   update(STEP);
@@ -355,7 +366,29 @@ const SIM = require(path.join(ROOT, 'sim.js'));
   }
   assert(sawTeamKill, 'squad battle produced team kills (' + G.match.a + '-' + G.match.b + ')');
   for (const s of G.W.ships) assert(finiteShip(s), 'squad ship finite: ' + s.name);
-  console.log('OK  client: solo, duel, squad, and simulated online paths all run clean');
+
+  // squad ships keep their type-identity hues; team is a relation, not a paint job
+  for (const s of G.W.ships) {
+    assert(s.hue === api.SIM.SHIP_TYPES[s.type].hue, 'ship keeps type hue: ' + s.name);
+  }
+
+  // the zone: persistent world you drop into and out of
+  api.G.pendingMode = 'ffa';
+  const zp = api.startSolo('corsair');
+  assert(G.match === null && G.W.opts.zoneWorld, 'zone mode has no match clock');
+  const zoneRef = G.W;
+  const zoneScores = G.W.ships.filter(s => s.bot).reduce((a, s) => a + s.kills, 0);
+  for (let i = 0; i < 120; i++) update(STEP);
+  // leave and re-enter: same world, same bots, history intact
+  api.G.state = 'play';
+  const leave = api.G;
+  // simulate leaving via the exposed flow
+  (function () { const i2 = G.W.ships.indexOf(zp); if (i2 >= 0) G.W.ships.splice(i2, 1); })();
+  api.G.player = null; api.G.state = 'title';
+  api.G.pendingMode = 'ffa';
+  api.startSolo('meteor');
+  assert(G.W === zoneRef, 'the zone persists across visits — same living world');
+  console.log('OK  client: solo, duel, squad, zone, and simulated online paths all run clean');
 }
 
 // ============================================================ 3) server test
