@@ -75,6 +75,16 @@ Works on **phones and tablets** too: a virtual stick appears under your left
 thumb (point it where you want to fly), weapon buttons sit under your right,
 and every menu is tappable — the hosted zone is fully playable from mobile.
 
+**Fullscreen on mobile**: tap the `⛶` button (top right, next to pause) on
+Android and desktop browsers. iPhone Safari has no fullscreen API — instead
+use **Share → Add to Home Screen**: the game ships installable-app metadata,
+so the home-screen icon launches it chrome-less and fullscreen on both
+platforms. **Adaptive quality**: if a device can't hold the frame rate, the
+game automatically steps its render budget down (native-resolution
+rendering first, then a lean mode without bloom) until the fight is smooth
+— map size never affects frame rate, since only the visible chunks are
+ever drawn.
+
 ## Play online (multiplayer)
 
 ```sh

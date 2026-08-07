@@ -17,6 +17,7 @@
     state: 'boot',      // title | select | nameentry | connecting | error | play
     online: false,
     paused: false, muted: false,
+    qual: 2, fpsEMA: 60,  // adaptive quality: 2 full, 1 native-res, 0 lean
     time: 0, beepT: 0,
     W: null,            // sim world
     player: null,
@@ -74,6 +75,7 @@
       },
       { key: 'pause', label: 'II', x: vw - 28, y: 64, r: 16 },
     ];
+    if (fsAvailable()) T.btns.push({ key: 'fs', label: '⛶', x: vw - 28, y: 108, r: 16 });
     if (G.online) T.btns.push({ key: 'chat', label: 'CHAT', x: 30, y: vh * 0.4, r: 24 * sc });
     if (G.player && !G.player.t.blink && G.player.team &&
         G.W.ships.some(s => s !== G.player && !s.dead && s.team === G.player.team && s.type === 'comet')) {
@@ -84,9 +86,28 @@
     const r = canvas.getBoundingClientRect();
     return { x: t.clientX - r.left, y: t.clientY - r.top };
   }
+  // Fullscreen: supported on Android browsers and desktop; iPhone Safari
+  // has no Fullscreen API — there, "Add to Home Screen" launches the game
+  // chrome-less instead (the page ships the standalone-app meta for it)
+  function fsAvailable() {
+    const d = GLOBAL.document;
+    return !!(d && (d.fullscreenEnabled || d.webkitFullscreenEnabled));
+  }
+  function toggleFullscreen() {
+    const d = GLOBAL.document;
+    try {
+      if (d.fullscreenElement || d.webkitFullscreenElement) {
+        (d.exitFullscreen || d.webkitExitFullscreen).call(d);
+      } else {
+        const el = d.documentElement;
+        (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
+      }
+    } catch (e) { }
+  }
   function pressTouchButton(key) {
     const p = G.player;
     if (key === 'pause') { G.paused = !G.paused; return; }
+    if (key === 'fs') { toggleFullscreen(); return; }
     if (key === 'chat') { mobileChat(); return; }
     if (!p || p.dead || G.paused) return;
     if (key === 'fire') T.fire = true;
@@ -841,23 +862,25 @@
   }
 
   // ---------------------------------------------------------------- fx
+  // particle budget shrinks in lean quality mode
+  function partCap() { return G.qual === 0 ? 380 : 800; }
   function spark(x, y, hue, n, speed) {
     for (let i = 0; i < n; i++) {
-      if (G.parts.length > 800) return;
+      if (G.parts.length > partCap()) return;
       const a = rand(0, TAU), sp = rand(0.2, 1) * speed;
       G.parts.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: rand(0.25, 0.7), max: 0.7, hue, kind: 'spark' });
     }
   }
   function puff(x, y, hue, n, speed, size) {
     for (let i = 0; i < n; i++) {
-      if (G.parts.length > 800) return;
+      if (G.parts.length > partCap()) return;
       const a = rand(0, TAU), sp = rand(0.1, 1) * speed;
       G.parts.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: rand(0.4, 1), max: 1, hue, kind: 'puff', size: size * rand(0.6, 1.4) });
     }
   }
   function debris(x, y, hue, n) {
     for (let i = 0; i < n; i++) {
-      if (G.parts.length > 800) return;
+      if (G.parts.length > partCap()) return;
       const a = rand(0, TAU), sp = rand(60, 320);
       G.parts.push({
         x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
@@ -1471,7 +1494,7 @@
 
     // thrust exhaust for every live thrusting ship
     for (const s of W.ships) {
-      if (s.dead || G.parts.length > 780) continue;
+      if (s.dead || G.parts.length > partCap() - 20) continue;
       const th = s.remote ? s.netTh : (s.ctl.thrust > 0 || s.rocketT > 0 ? 1 : 0);
       if (th && Math.random() < 0.7) {
         const rk = s.rocketT > 0;
@@ -3022,7 +3045,7 @@
     ctx.fillStyle = 'rgba(3,5,12,0.22)';
     ctx.fillRect(0, 0, vw, vh);
     if (G.W && G.mapChunks) drawWorld();
-    applyBloom();
+    if (G.qual > 0) applyBloom();
     if (vignette) ctx.drawImage(vignette, 0, 0, vw, vh);
     if (G.state === 'title') drawTitle();
     else if (G.state === 'select') drawSelect();
@@ -3272,10 +3295,7 @@
       say(MUS.on ? 'Music on' : 'Music off', '#8df');
       return;
     }
-    if (code === 'KeyF') {
-      try { if (canvas.requestFullscreen) canvas.requestFullscreen(); } catch (err) { }
-      return;
-    }
+    if (code === 'KeyF') { toggleFullscreen(); return; }
 
     if (G.state === 'title') {
       if (code === 'Enter' || code === 'Space') { G.online = false; G.pendingMode = 'squad'; G.state = 'select'; }
@@ -3343,7 +3363,9 @@
     const vv = GLOBAL.visualViewport;
     vw = Math.round((vv && vv.width) || GLOBAL.innerWidth || 1280);
     vh = Math.round((vv && vv.height) || GLOBAL.innerHeight || 720);
-    dpr = Math.min(2, GLOBAL.devicePixelRatio || 1);
+    // adaptive quality: below full tier, render at native CSS resolution —
+    // on a 3x phone that's a ~4x fill-rate saving
+    dpr = Math.min(G.qual >= 2 ? 2 : 1, GLOBAL.devicePixelRatio || 1);
     try {
       const doc = GLOBAL.document;
       const probe = doc.createElement('div');
@@ -3370,11 +3392,26 @@
     try { filterOK = typeof ctx.filter === 'string'; } catch (e) { filterOK = false; }
   }
 
-  let lastT = 0, acc = 0;
+  let lastT = 0, acc = 0, qualT = 0;
   function frame(ts) {
     GLOBAL.requestAnimationFrame(frame);
     const dt = Math.min(0.1, (ts - lastT) / 1000 || 0);
     lastT = ts;
+    // adaptive quality: sustained low fps steps the render budget down —
+    // first native-res rendering (dpr 1), then lean mode (no bloom, fewer
+    // particles). Down only, never flapping back and forth.
+    if (dt > 0.001) {
+      G.fpsEMA += (1 / dt - G.fpsEMA) * 0.05;
+      qualT += dt;
+      if (qualT > 2.5) {
+        qualT = 0;
+        if (G.fpsEMA < 42 && G.qual > 0) {
+          G.qual--;
+          resize();
+          say('Performance mode: graphics scaled to keep the fight smooth', '#8ac');
+        }
+      }
+    }
     acc += dt;
     // input is sampled per fixed sim step, not per rendered frame — hold
     // ramps stay identical at any frame rate, and taps can't be amplified
