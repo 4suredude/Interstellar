@@ -39,6 +39,16 @@ black; **asteroid belts** sweep the sector in navigable arcs; and lone
 all greens cache around bases, so stations are supply depots — worth
 flying to, and worth fighting over.
 
+And somewhere in the frontier churns **THE MAELSTROM** — a storm of
+flying rock two kilometres wide that tears hulls on contact ("torn apart
+by the maelstrom" is a real way to die). Its eye is calm, its interior is
+rich with greens, and its boundary paints red on your radar. Scattered
+through normal space, **wormholes** (purple swirls, on radar too) swallow
+any ship that strays too close — bots included — and dump it inside the
+storm; a rim gate leads back toward the citadel. Rock trajectories are
+closed-form functions of world time, so every client sees identical
+storms with zero extra netcode — the server just shares its clock.
+
 Encounters are **events**: when a hostile enters your radar bubble you get
 a sonar **CONTACT ping** — target brackets if they're on screen, a bearing
 chevron with range if they're not — and the adaptive soundtrack surges.

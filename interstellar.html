@@ -555,9 +555,72 @@
       nextId: 1, nextPrizeId: 1,
     };
     genMap(W);
+    genDanger(W);
     return W;
   }
   const ev = (W, e) => { W.events.push(e); };
+
+  // ------------------------------------------------------------ the maelstrom
+  // A danger zone in the frontier: a swirling storm of rock that tears
+  // hulls on contact, seeded with wormholes that swallow the unwary and
+  // spit them out inside it. Rock paths are CLOSED-FORM functions of world
+  // time (epicycles around the storm's eye), so every client computes
+  // identical positions from the shared seed — no netcode required.
+  function genDanger(W) {
+    const rng = W.rng;
+    let cx = WORLD / 2 + WORLD * 0.3, cy = WORLD / 2;
+    for (let i = 0; i < 60; i++) {
+      const a = rng() * TAU, rad = WORLD * (0.28 + rng() * 0.1);
+      const x = WORLD / 2 + Math.cos(a) * rad, y = WORLD / 2 + Math.sin(a) * rad;
+      if (x < 3200 || y < 3200 || x > WORLD - 3200 || y > WORLD - 3200) continue;
+      if ((W.bases || []).some(b => hyp(x - b.x, y - b.y) < b.r + 2800)) continue;
+      cx = x; cy = y; break;
+    }
+    const R = 2300;
+    W.danger = { x: cx, y: cy, r: R };
+    W.rocks = [];
+    for (let i = 0; i < 22; i++) {
+      const r1 = 150 + rng() * (R - 400);
+      W.rocks.push({
+        r1,
+        w1: (0.07 + rng() * 0.2) * (rng() < 0.5 ? -1 : 1) * (1.35 - (r1 / R) * 0.7),
+        p1: rng() * TAU,
+        a2: 40 + rng() * 150, w2: 0.3 + rng() * 1.1, p2: rng() * TAU,
+        rad: 15 + rng() * 20, spin: (rng() - 0.5) * 2, shape: (rng() * 1e9) | 0,
+      });
+    }
+    // three gates in normal space open INTO the storm; a fourth at the
+    // storm's rim leads back toward the citadel — the way home
+    W.wormholes = [];
+    for (let i = 0; i < 3; i++) {
+      let x = WORLD / 2 + 2000 + i * 900, y = WORLD / 2 + 2000;
+      for (let t = 0; t < 40; t++) {
+        const a = rng() * TAU, rad = WORLD * (0.14 + rng() * 0.3);
+        const px = WORLD / 2 + Math.cos(a) * rad, py = WORLD / 2 + Math.sin(a) * rad;
+        if (px < 900 || py < 900 || px > WORLD - 900 || py > WORLD - 900) continue;
+        if (hyp(px - cx, py - cy) < R + 900) continue;
+        if ((W.bases || []).some(b => hyp(px - b.x, py - b.y) < b.r + 600)) continue;
+        if (rectSolid(W, px - 70, py - 70, 140, 140)) continue;
+        x = px; y = py; break;
+      }
+      const da = rng() * TAU, dr = rng() * R * 0.45;
+      W.wormholes.push({ x, y, dx: cx + Math.cos(da) * dr, dy: cy + Math.sin(da) * dr });
+    }
+    const ea = rng() * TAU;
+    W.wormholes.push({
+      x: cx + Math.cos(ea) * R * 0.9, y: cy + Math.sin(ea) * R * 0.9,
+      dx: WORLD / 2 + Math.cos(ea) * 950, dy: WORLD / 2 + Math.sin(ea) * 950,
+    });
+  }
+  function rockAt(W, rk, t) {
+    const a1 = rk.p1 + rk.w1 * t, a2 = rk.p2 + rk.w2 * t;
+    return {
+      x: W.danger.x + Math.cos(a1) * rk.r1 + Math.cos(a2) * rk.a2,
+      y: W.danger.y + Math.sin(a1) * rk.r1 + Math.sin(a2) * rk.a2,
+      vx: -Math.sin(a1) * rk.r1 * rk.w1 - Math.sin(a2) * rk.a2 * rk.w2,
+      vy: Math.cos(a1) * rk.r1 * rk.w1 + Math.cos(a2) * rk.a2 * rk.w2,
+    };
+  }
 
   // ------------------------------------------------------------ ships
   function applyLoadoutDefaults(s) {
@@ -584,6 +647,7 @@
       gunCd: 0, bombCd: 0, repelCd: 0, burstCd: 0, rocketT: 0, regenT: 0, blinkCd: 0, warpCd: 0,
       dormant: false,
       dead: false, respawn: 0, safe: 0, flash: 0,
+      rockT: 0, wormT: 0,        // maelstrom grace timers
       kills: 0, deaths: 0, score: 0,
       ctl: { turn: 0, thrust: 0, strafe: 0, gun: false, bomb: false },
       ai: { target: null, mode: 'roam', think: rand(0, 0.2), wp: null, err: 0, dodge: 0, dodgeAngle: 0, avoid: 0, wantRepel: false, skill: 0.5 },
@@ -1218,11 +1282,16 @@
         W.prizeT = 1.4;
         if (W.prizes.length < PRIZE_CAP) {
           // a third of the greens cache around installations — bases are
-          // supply depots, worth flying to and worth fighting over
+          // supply depots, worth flying to and worth fighting over — and a
+          // share falls inside the maelstrom: the best loot sits in the storm
           let p = null;
-          if (W.bases && W.bases.length && Math.random() < 0.35) {
+          const roll = Math.random();
+          if (W.bases && W.bases.length && roll < 0.35) {
             const b = W.bases[irand(W.bases.length)];
             p = findClearNear(W, b.x + rand(-0.6, 0.6) * b.r, b.y + rand(-0.6, 0.6) * b.r);
+          } else if (W.danger && roll < 0.5) {
+            const a = rand(0, TAU), rr = Math.sqrt(rand()) * W.danger.r * 0.85;
+            p = findClearNear(W, W.danger.x + Math.cos(a) * rr, W.danger.y + Math.sin(a) * rr);
           }
           if (!p) p = randClearPoint(W);
           const pr = addPrize(W, p.x, p.y);
@@ -1234,6 +1303,43 @@
         if (W.prizes[i].ttl <= 0) {
           ev(W, { e: 'prizeGone', prize: W.prizes[i].id });
           W.prizes.splice(i, 1);
+        }
+      }
+    }
+    // the maelstrom: storm rock tears local hulls; wormholes swallow anyone
+    // who strays too close (remote ghosts are handled by their own owner)
+    if (W.danger) {
+      for (const s of W.ships) {
+        if (s.dead || s.remote) continue;
+        if (s.rockT > 0) s.rockT -= dt;
+        if (s.wormT > 0) s.wormT -= dt;
+        if (s.rockT <= 0 && hyp(s.x - W.danger.x, s.y - W.danger.y) < W.danger.r + 250) {
+          for (const rk of W.rocks) {
+            const q = rockAt(W, rk, W.time);
+            const d = hyp(s.x - q.x, s.y - q.y);
+            if (d < rk.rad + s.t.radius) {
+              const rel = hyp(s.vx - q.vx, s.vy - q.vy);
+              const inv = 1 / Math.max(1, d);
+              s.vx += (s.x - q.x) * inv * (180 + rel * 0.4);
+              s.vy += (s.y - q.y) * inv * (180 + rel * 0.4);
+              s.rockT = 0.7;
+              ev(W, { e: 'rockhit', id: s.id, x: q.x, y: q.y, rel });
+              damageShip(W, s, 140 + rel * 0.45, null);
+              break;
+            }
+          }
+        }
+        if (s.wormT <= 0) {
+          for (const wh of W.wormholes) {
+            if (hyp(s.x - wh.x, s.y - wh.y) < 58) {
+              ev(W, { e: 'worm', id: s.id, x0: s.x, y0: s.y, x1: wh.dx, y1: wh.dy, hue: s.hue });
+              s.x = wh.dx; s.y = wh.dy;
+              s.wormT = 4;
+              s.rockT = Math.max(s.rockT, 1.5);   // a breath before the storm bites
+              s.safe = Math.max(s.safe, 1.2);
+              break;
+            }
+          }
         }
       }
     }
@@ -1251,7 +1357,7 @@
     TAU, TILE, MAPS, WORLD, STEP, PRIZE_CAP,
     SHIP_ORDER, SHIP_TYPES, PRIZE_TYPES, BOT_NAMES, HUES,
     clamp, rand, irand, pick, angleNorm, mulberry32,
-    tileSolid, solidAtPx, rectSolid, losClear, randClearPoint, findSpawn,
+    tileSolid, solidAtPx, rectSolid, losClear, randClearPoint, findSpawn, rockAt,
     createWorld, makeShip, removeShip, spawnShip, addBots,
     applyLoadoutDefaults, applyPrize, addPrize, removePrizeById,
     fireGun, fireBomb, doRepel, doBurst, fireRocket, doBlink, warpToBeacon,
@@ -1572,6 +1678,8 @@
   const sndChat = () => tone('sine', 520, 520, 0.05, 0.08);
   // sonar ping: a hostile just entered your radar bubble
   const sndContact = () => { tone('sine', 1250, 860, 0.28, 0.11); tone('sine', 2500, 1720, 0.14, 0.03); };
+  const sndRock = (x, y) => { const v = worldVol(x, y, 0.5); if (v > 0.01) { tone('triangle', 110, 40, 0.22, v * 0.6); noiseHit(0.15, v * 0.3, 500, 200); } };
+  const sndWorm = (x, y) => { const v = worldVol(x, y, 0.6); if (v > 0.01) { tone('sine', 700, 120, 0.5, v * 0.4); tone('sine', 350, 900, 0.4, v * 0.2, 0.1); } };
   const sndBlink = (x, y) => {
     const v = worldVol(x, y, 0.28); if (v < 0.01) return;
     tone('sine', 300, 1400, 0.12, v);
@@ -2161,6 +2269,19 @@
   function flash(x, y, size, hue) {
     G.parts.push({ x, y, vx: 0, vy: 0, life: 0.09, max: 0.09, hue, kind: 'flash', size });
   }
+  // seeded jaggy asteroid outline, baked once per rock
+  function rockPath(rk) {
+    if (rk._pts) return rk._pts;
+    const rr = SIM.mulberry32(rk.shape);
+    const n = 9 + ((rr() * 4) | 0);
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+      const a = i / n * TAU, k = 0.72 + rr() * 0.35;
+      pts.push([Math.cos(a) * rk.rad * k, Math.sin(a) * rk.rad * k]);
+    }
+    rk._pts = pts;
+    return pts;
+  }
   function blinkFX(x0, y0, x1, y1, hue) {
     G.waves.push({ x: x0, y: y0, r: 4, maxR: 55, t: 0, dur: 0.3, hue });
     G.waves.push({ x: x1, y: y1, r: 30, maxR: 6, t: 0, dur: 0.3, hue });
@@ -2258,19 +2379,38 @@
         case 'shipBounce':
           sndBounce(e.x, e.y);
           break;
+        case 'rockhit':
+          sndRock(e.x, e.y);
+          spark(e.x, e.y, 25, 10, 240);
+          if (mine) {
+            G.shake = Math.max(G.shake, 8);
+            G.hitFlash = Math.max(G.hitFlash, 0.3);
+            MUS.pulse = Math.min(1, MUS.pulse + 0.2);
+          }
+          break;
+        case 'worm':
+          blinkFX(e.x0, e.y0, e.x1, e.y1, 275);
+          sndWorm(e.x0, e.y0);
+          if (mine) {
+            G.inStorm = true;   // suppress the arrival banner — this one's better
+            banner('THE MAELSTROM', 'a wormhole swallowed you — the rim gate leads home', 3);
+            MUS.pulse = 1;
+          }
+          break;
         case 'boom':
           boomFX(e.x, e.y, 70 + 28 * e.level, 25, e.level >= 2);
           break;
         case 'kill': {
           boomFX(e.x, e.y, 95, e.hue, true);
           if (e.kName && e.killer !== e.victim) say(e.vName + ' killed by: ' + e.kName + ' (' + e.bounty + ')', '#8f8');
+          else if (!e.killer) say(e.vName + ' was torn apart by the maelstrom', '#f96');
           else say(e.vName + ' self-destructed', '#f88');
           // streak callouts keep the room aware of who's dangerous
           if (e.kStreak === 3) say(e.kName + ' is heating up (3)', '#fb6');
           else if (e.kStreak === 5) say(e.kName + ' is on a rampage! (5)', '#f96');
           else if (e.kStreak >= 8 && (e.kStreak - 8) % 3 === 0) say(e.kName + ' is UNSTOPPABLE (' + e.kStreak + ')', '#f66');
           if (G.player && e.victim === G.player.id) {
-            G.deathBy = e.kName && e.killer !== e.victim ? e.kName : 'their own bomb';
+            G.deathBy = e.kName && e.killer !== e.victim ? e.kName : (e.killer ? 'their own bomb' : 'the maelstrom');
             G.lastKillerId = e.killer;
             G.combo = 0;
             G.best = Math.max(G.best, G.player.score);
@@ -2443,6 +2583,7 @@
           };
         }
         G.W = SIM.createWorld(opts);
+        G.W.time = msg.wt || 0;   // maelstrom rocks are a function of world time
         prerenderMap();
         for (const r of msg.roster) rosterAdd(r);
         for (const p of msg.prizes) SIM.addPrize(G.W, p[1], p[2], p[0]);
@@ -2501,6 +2642,7 @@
         else if (msg.kind === 'repel') { SIM.injectRepel(W, o, msg); G.waves.push({ x: msg.x, y: msg.y, r: 10, maxR: 230, t: 0, dur: 0.35, hue: 200 }); sndRepel(msg.x, msg.y); }
         else if (msg.kind === 'blink') { blinkFX(msg.x0, msg.y0, msg.x1, msg.y1, msg.hue || o.hue); }
         else if (msg.kind === 'warp') { blinkFX(msg.x0, msg.y0, msg.x1, msg.y1, msg.hue || o.hue); }
+        else if (msg.kind === 'worm') { blinkFX(msg.x0, msg.y0, msg.x1, msg.y1, 275); sndWorm(msg.x0, msg.y0); }
         break;
       }
       case 'leech': {
@@ -2518,6 +2660,7 @@
           v.dead = true;
           boomFX(v.x, v.y, 95, v.hue, true);
           if (k && msg.killer !== msg.id) say(v.name + ' killed by: ' + (k ? k.name : '?') + ' (' + msg.bounty + ')', '#8f8');
+          else if (!msg.killer) say(v.name + ' was torn apart by the maelstrom', '#f96');
           else say(v.name + ' self-destructed', '#f88');
         }
         break;
@@ -2530,6 +2673,10 @@
         }
         break;
       }
+      case 'clock':
+        // re-align the world clock so everyone's storm rocks fly in step
+        if (W && Math.abs(W.time - msg.wt) > 0.75) W.time = msg.wt;
+        break;
       case 'prize+':
         if (W) SIM.addPrize(W, msg.x, msg.y, msg.id);
         break;
@@ -3722,6 +3869,71 @@
           ctx.drawImage(mapChunk(cx, cy), cx * CHUNK_PX, cy * CHUNK_PX);
     }
 
+    // THE MAELSTROM: storm boundary, flying rock, wormholes
+    if (W.danger) {
+      const camL = G.cam.x - vw / 2 - 90, camR = G.cam.x + vw / 2 + 90;
+      const camT = G.cam.y - vh / 2 - 90, camB = G.cam.y + vh / 2 + 90;
+      const D = W.danger;
+      if (D.x + D.r > camL && D.x - D.r < camR && D.y + D.r > camT && D.y - D.r < camB) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,95,60,0.3)';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([26, 20]);
+        ctx.lineDashOffset = -G.time * 30;
+        ctx.beginPath(); ctx.arc(D.x, D.y, D.r, 0, TAU); ctx.stroke();
+        ctx.strokeStyle = 'rgba(255,150,80,0.16)';
+        ctx.setLineDash([8, 34]);
+        ctx.lineDashOffset = G.time * 46;
+        ctx.beginPath(); ctx.arc(D.x, D.y, D.r - 16, 0, TAU); ctx.stroke();
+        ctx.restore();
+      }
+      for (const rk of W.rocks) {
+        const q = SIM.rockAt(W, rk, W.time);
+        if (q.x < camL || q.x > camR || q.y < camT || q.y > camB) continue;
+        ctx.save();
+        ctx.translate(q.x, q.y);
+        ctx.globalCompositeOperation = 'lighter';
+        drawGlow(0, 0, rk.rad * 2.1, 18, 0.1);
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.rotate(G.time * rk.spin);
+        const pts = rockPath(rk);
+        ctx.beginPath();
+        for (let i = 0; i < pts.length; i++) i ? ctx.lineTo(pts[i][0], pts[i][1]) : ctx.moveTo(pts[0][0], pts[0][1]);
+        ctx.closePath();
+        ctx.fillStyle = '#232837';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255,140,90,0.3)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        // sun-side lit edge
+        ctx.strokeStyle = 'rgba(190,205,235,0.35)';
+        ctx.beginPath();
+        const half = (pts.length / 2) | 0;
+        for (let i = 0; i <= half; i++) i ? ctx.lineTo(pts[i][0], pts[i][1]) : ctx.moveTo(pts[0][0], pts[0][1]);
+        ctx.stroke();
+        ctx.restore();
+      }
+      for (const wh of W.wormholes) {
+        if (wh.x < camL || wh.x > camR || wh.y < camT || wh.y > camB) continue;
+        ctx.save();
+        ctx.translate(wh.x, wh.y);
+        ctx.globalCompositeOperation = 'lighter';
+        drawGlow(0, 0, 90, 275, 0.5);
+        for (let i = 0; i < 3; i++) {
+          ctx.rotate(G.time * (1.1 + i * 0.5) * (i % 2 ? -1 : 1));
+          ctx.strokeStyle = 'hsla(' + (265 + i * 14) + ',90%,70%,0.55)';
+          ctx.lineWidth = 2.5 - i * 0.5;
+          ctx.beginPath();
+          ctx.arc(0, 0, 18 + i * 12, 0.3, TAU * 0.7);
+          ctx.stroke();
+        }
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = 'rgba(4,2,12,0.92)';
+        ctx.beginPath(); ctx.arc(0, 0, 12, 0, TAU); ctx.fill();
+        ctx.restore();
+      }
+    }
+
     // core objective ring
     if (G.match && G.match.mode === 'core') {
       const C = WORLD / 2;
@@ -3955,6 +4167,17 @@
     const narrow = T.active && vw < 640;   // phone layout
     drawContacts();
 
+    // inside the maelstrom the screen itself feels hostile
+    if (G.W.danger && !p.dead) {
+      const inD = Math.hypot(p.x - G.W.danger.x, p.y - G.W.danger.y) < G.W.danger.r;
+      if (inD && !G.inStorm) banner('THE MAELSTROM', 'storm rock will tear your hull', 2.2);
+      G.inStorm = inD;
+      if (inD) {
+        ctx.fillStyle = 'rgba(255,60,30,' + (0.05 + 0.03 * Math.sin(G.time * 3)).toFixed(3) + ')';
+        ctx.fillRect(0, 0, vw, vh);
+      }
+    }
+
     // energy bar with segment ticks + glow cap
     const bw = Math.min(380, vw - 40), bx = vw / 2 - bw / 2, by = narrow ? 60 : 16;
     const frac = clamp(p.energy / p.maxEnergy, 0, 1);
@@ -4159,6 +4382,18 @@
     ctx.lineTo(rx + R / 2 + Math.cos(swa) * R / 2, ry + R / 2 + Math.sin(swa) * R / 2);
     ctx.stroke();
     const on = (x, y) => x >= wx && x <= wx + RW && y >= wy && y <= wy + RW;
+    // the maelstrom and its gates paint on the scanner
+    if (G.W.danger) {
+      const D = G.W.danger;
+      ctx.strokeStyle = 'rgba(255,90,60,' + (0.35 + 0.15 * Math.sin(G.time * 3)).toFixed(3) + ')';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(rx + (D.x - wx) * k, ry + (D.y - wy) * k, D.r * k, 0, TAU);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(200,130,255,0.9)';
+      for (const wh of G.W.wormholes)
+        if (on(wh.x, wh.y)) ctx.fillRect(rx + (wh.x - wx) * k - 2, ry + (wh.y - wy) * k - 2, 4, 4);
+    }
     for (const p of G.W.prizes) {
       if (!on(p.x, p.y)) continue;
       ctx.fillStyle = 'rgba(90,255,130,0.8)';

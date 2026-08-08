@@ -104,6 +104,33 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     console.log('OK  teams: FF off, streaks, anchored spawns all behave');
   }
 
+  // the maelstrom: danger zone, storm rock, wormholes
+  {
+    const Wd = SIM.createWorld({ seed: 99 });
+    assert(Wd.danger && Wd.danger.r > 0, 'danger zone generated');
+    assert(Wd.rocks.length === 22 && Wd.wormholes.length === 4, 'rocks and wormholes exist');
+    const q0 = SIM.rockAt(Wd, Wd.rocks[0], 0), q5 = SIM.rockAt(Wd, Wd.rocks[0], 5);
+    assert(Math.hypot(q5.x - q0.x, q5.y - q0.y) > 30, 'storm rock flies');
+    const Wd2 = SIM.createWorld({ seed: 99 });
+    assert(Wd2.danger.x === Wd.danger.x && Wd2.wormholes[2].dx === Wd.wormholes[2].dx,
+      'maelstrom deterministic from seed');
+    // rock collision damages a hull
+    const rs = SIM.makeShip(Wd, 'corsair', 'local', 'RockTest');
+    SIM.spawnShip(Wd, rs);
+    const q = SIM.rockAt(Wd, Wd.rocks[0], Wd.time + SIM.STEP);
+    rs.x = q.x; rs.y = q.y; rs.vx = 0; rs.vy = 0; rs.safe = 0; rs.rockT = 0; rs.energy = 1000;
+    SIM.updateWorld(Wd, SIM.STEP);
+    assert(rs.energy < 1000, 'storm rock damages hulls');
+    // wormhole warps a hull to its destination in the storm
+    const wh = Wd.wormholes[0];
+    rs.dead = false; rs.x = wh.x; rs.y = wh.y; rs.vx = 0; rs.vy = 0;
+    rs.rockT = 99; rs.wormT = 0; rs.safe = 0; rs.energy = 1000;
+    SIM.updateWorld(Wd, SIM.STEP);
+    assert(Math.hypot(rs.x - wh.dx, rs.y - wh.dy) < 60, 'wormhole warps ships');
+    assert(Math.hypot(wh.dx - Wd.danger.x, wh.dy - Wd.danger.y) < Wd.danger.r, 'gate opens into the storm');
+    console.log('OK  maelstrom: storm rock flies + damages, wormholes warp, deterministic');
+  }
+
   // map styles: deterministic per seed, distinct per style
   {
     const wN = SIM.createWorld({ seed: 5, mapStyle: 'nexus' });

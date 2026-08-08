@@ -378,6 +378,12 @@ function rebuildWorld(style) {
 }
 const tk = { 1: 0, 2: 0 };
 
+// world-clock sync: maelstrom rock positions are a closed-form function of
+// W.time, so clients periodically re-align to the server's clock
+setInterval(() => {
+  if (clients.size) broadcast({ t: 'clock', wt: Math.round(W.time * 100) / 100 });
+}, 10000);
+
 const rk = new Map();               // per-round kills, for MVP
 const corePts = { 1: 0, 2: 0 };
 let coreAcc = 0, coreTeam = 0;
@@ -529,7 +535,7 @@ function onMessage(cl, msg) {
       cl.joined = true;
       sendTo(cl, {
         t: 'welcome', id: cl.id, hue, seed: SEED, team, goal: GOAL, mode: MODE,
-        style: MAPSTYLE, flip: SIDES,
+        style: MAPSTYLE, flip: SIDES, wt: Math.round(W.time * 100) / 100,
         ta: tk[1], tb: tk[2], ca: corePts[1], cb: corePts[2],
         me: { elo: Math.round(cl.pilot.elo), dw: cl.pilot.dw, dl: cl.pilot.dl },
         roster: roster().filter(r => r.id !== cl.id),
@@ -713,6 +719,9 @@ setInterval(() => {
       }
       case 'warp':
         broadcast({ t: 'fire', kind: 'warp', id: e.id, x0: e.x0, y0: e.y0, x1: e.x1, y1: e.y1, hue: e.hue });
+        break;
+      case 'worm':   // a bot fell through a wormhole
+        broadcast({ t: 'fire', kind: 'worm', id: e.id, x0: e.x0, y0: e.y0, x1: e.x1, y1: e.y1, hue: e.hue });
         break;
       case 'kill': {
         // a bot died in the server sim
