@@ -18,13 +18,13 @@
 
   const TAU = Math.PI * 2;
   const TILE = 16;
-  // A real sector of space: 512x512 tiles (8192px) — crossing it at full burn
-  // takes upward of twenty seconds, so travel is a phase of the game and a
-  // contact on the radar is something you chase.
-  const MAPS = 512;
+  // A vast sector of space at the classic zone scale: 1024x1024 tiles
+  // (16384px). Crossing it at full burn takes most of a minute — travel is
+  // a real phase of the game, and a contact out here is an event.
+  const MAPS = 1024;
   const WORLD = TILE * MAPS;
   const STEP = 1 / 60;
-  const PRIZE_CAP = 80;
+  const PRIZE_CAP = 160;
 
   const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
   const rand = (a, b) => a === undefined ? Math.random() : a + Math.random() * (b - a);
@@ -313,10 +313,16 @@
       }
     };
     // carve the battlegrounds clean (structures that leaned in get trimmed),
-    // then the arena interior
-    for (let ty = 2; ty < MAPS - 2; ty++)
-      for (let tx = 2; tx < MAPS - 2; tx++)
-        if (inClearing(tx, ty, 0) || hyp(tx - C, ty - C) < AR - 1) set(tx, ty, 0);
+    // then the arena interior. Carving per-clearing keeps generation fast
+    // even at a million tiles — a whole-map scan against every clearing
+    // would take seconds.
+    for (const cl of clearings.concat([{ x: C, y: C, r: AR - 1 }])) {
+      const x0 = Math.max(2, Math.floor(cl.x - cl.r)), x1 = Math.min(MAPS - 2, Math.ceil(cl.x + cl.r) + 1);
+      const y0 = Math.max(2, Math.floor(cl.y - cl.r)), y1 = Math.min(MAPS - 2, Math.ceil(cl.y + cl.r) + 1);
+      for (let ty = y0; ty < y1; ty++)
+        for (let tx = x0; tx < x1; tx++)
+          if (hyp(tx - cl.x, ty - cl.y) < cl.r) set(tx, ty, 0);
+    }
     drawRing(AR, [0, 0.25, 0.5, 0.75], 0.11);
     if (style === 'rings') {
       // concentric battle rings around the core
@@ -369,8 +375,12 @@
   // the population concentrates. The frontier beyond is for roaming, prize
   // runs, and long chases, not for respawn commutes.
   function midSectorPoint(W) {
+    // hotspot radius is capped in absolute terms: however vast the sector,
+    // the population concentrates in a fightable core and the rest is
+    // frontier — that's what makes a distant contact worth chasing
+    const HOT = Math.min(MAPS * 0.3, 190);
     for (let i = 0; i < 60; i++) {
-      const a = rand(0, TAU), rr = Math.sqrt(rand()) * MAPS * 0.3;
+      const a = rand(0, TAU), rr = Math.sqrt(rand()) * HOT;
       const tx = (MAPS / 2 + Math.cos(a) * rr) | 0, ty = (MAPS / 2 + Math.sin(a) * rr) | 0;
       let ok = true;
       for (let j = -1; j <= 1 && ok; j++)

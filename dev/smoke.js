@@ -297,7 +297,7 @@ const SIM = require(path.join(ROOT, 'sim.js'));
   assert(api, 'client exported hooks');
   const { G, startSolo, update, render, STEP } = api;
   assert(G.state === 'title', 'client boots to title');
-  assert(G.W.ships.length === 16, 'attract-mode bots exist');
+  assert(G.W.ships.length === 20, 'attract-mode bots exist');
   for (let i = 0; i < 240; i++) update(STEP);
   render();
 

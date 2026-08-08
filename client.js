@@ -18,6 +18,7 @@
     online: false,
     paused: false, muted: false,
     qual: 2, fpsEMA: 60,  // adaptive quality: 2 full, 1 native-res, 0 lean
+    contacts: new Map(), contactFx: [], contactT: 0,  // radar contact pings
     time: 0, beepT: 0,
     W: null,            // sim world
     player: null,
@@ -303,6 +304,8 @@
   const sndRocket = () => noiseHit(1.6, 0.22, 900, 300);
   const sndBeep = () => tone('square', 880, 880, 0.06, 0.1);
   const sndChat = () => tone('sine', 520, 520, 0.05, 0.08);
+  // sonar ping: a hostile just entered your radar bubble
+  const sndContact = () => { tone('sine', 1250, 860, 0.28, 0.11); tone('sine', 2500, 1720, 0.14, 0.03); };
   const sndBlink = (x, y) => {
     const v = worldVol(x, y, 0.28); if (v < 0.01) return;
     tone('sine', 300, 1400, 0.12, v);
@@ -1150,6 +1153,7 @@
     switch (msg.t) {
       case 'welcome': {
         G.myId = msg.id;
+        G.contacts.clear(); G.contactFx.length = 0;
         const team = msg.team || 0;
         G.zoneMode = msg.mode || 'teams';
         G.sideFlip = msg.flip || 0;
@@ -1346,8 +1350,8 @@
   function newSoloWorld() {
     G.W = SIM.createWorld({ seed: (Math.random() * 1e9) | 0, spawnPrizes: true, zoneWorld: true });
     prerenderMap();
-    SIM.addBots(G.W, 16);
-    for (let i = 0; i < 40; i++) {
+    SIM.addBots(G.W, 20);
+    for (let i = 0; i < 60; i++) {
       const p = SIM.randClearPoint(G.W);
       SIM.addPrize(G.W, p.x, p.y);
     }
@@ -1490,6 +1494,33 @@
       h = Math.min(1, h + MUS.pulse);
       MUS.pulse *= Math.exp(-0.5 * dt);
       MUS.heat += (h - MUS.heat) * (1 - Math.exp(-dt * (h > MUS.heat ? 1.5 : 0.22)));
+    }
+
+    // CONTACT pings: a hostile entering your radar bubble is announced —
+    // sonar ping, target brackets, and the music surges. Stealth hulls
+    // arrive unannounced; that's their job.
+    G.contactT += dt;
+    if (G.contactT > 0.25 && G.player && !G.player.dead && G.state === 'play') {
+      G.contactT = 0;
+      for (const s of W.ships) {
+        if (s === G.player || s.dead) continue;
+        if (s.team && G.player.team && s.team === G.player.team) continue;
+        if (s.t.stealth || s.t.radarStealth) continue;
+        const d = Math.hypot(s.x - G.player.x, s.y - G.player.y);
+        if (d < 1900) {
+          const seen = G.contacts.get(s.id);
+          if (seen === undefined || G.time - seen > 18) {
+            G.contactFx.push({ id: s.id, t: 0 });
+            sndContact();
+            MUS.pulse = Math.min(1, MUS.pulse + 0.3);
+          }
+          G.contacts.set(s.id, G.time);
+        }
+      }
+    }
+    for (let i = G.contactFx.length - 1; i >= 0; i--) {
+      G.contactFx[i].t += dt;
+      if (G.contactFx[i].t > 2.6) G.contactFx.splice(i, 1);
     }
 
     // thrust exhaust for every live thrusting ship
@@ -2581,10 +2612,79 @@
   }
   function shipColor(s, l, a) { return 'hsla(' + s.hue + ',95%,' + l + '%,' + (a == null ? 1 : a) + ')'; }
 
+  // CONTACT markers + hunt compass: encounters are events, and deep space
+  // always offers a heading toward the next one
+  function drawContacts() {
+    const p = G.player;
+    if (!p || p.dead) return;
+    for (const fx of G.contactFx) {
+      const s = G.W.byId.get(fx.id);
+      if (!s || s.dead) continue;
+      const a = clamp(1.3 - fx.t / 2, 0, 1) * (0.6 + 0.4 * Math.sin(G.time * 9));
+      const sx = s.x - G.cam.x + vw / 2, sy = s.y - G.cam.y + vh / 2;
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = 'rgba(255,130,80,0.95)';
+      ctx.lineWidth = 2;
+      if (sx > 20 && sx < vw - 20 && sy > 20 && sy < vh - 20) {
+        // on screen: corner brackets around the hostile
+        const r = 26 + fx.t * 6, k = 9;
+        ctx.beginPath();
+        for (const [ux, uy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+          ctx.moveTo(sx + ux * r, sy + uy * (r - k));
+          ctx.lineTo(sx + ux * r, sy + uy * r);
+          ctx.lineTo(sx + ux * (r - k), sy + uy * r);
+        }
+        ctx.stroke();
+      } else {
+        // off screen: edge chevron along the bearing, with range
+        const ang = Math.atan2(s.y - p.y, s.x - p.x);
+        const R = Math.min(vw, vh) * 0.36;
+        const ex = vw / 2 + Math.cos(ang) * R, ey = vh / 2 + Math.sin(ang) * R;
+        ctx.save();
+        ctx.translate(ex, ey);
+        ctx.rotate(ang);
+        ctx.beginPath();
+        ctx.moveTo(14, 0); ctx.lineTo(-8, -10); ctx.lineTo(-2, 0); ctx.lineTo(-8, 10);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(255,130,80,0.95)';
+        ctx.fill();
+        ctx.restore();
+        const d = Math.hypot(s.x - p.x, s.y - p.y);
+        txt('CONTACT ' + (d / 1000).toFixed(1) + 'km', ex, ey + (ey > vh / 2 ? -16 : 24), 11, 'rgba(255,150,100,0.95)', 'center', 700);
+      }
+      ctx.globalAlpha = 1;
+    }
+    // hunt compass: alone in the deep? a faint heading to the nearest
+    // hostile keeps every trek pointed at a fight
+    let near = null, nd = 1e9;
+    for (const s of G.W.ships) {
+      if (s === p || s.dead) continue;
+      if (s.team && p.team && s.team === p.team) continue;
+      if (s.t.stealth || s.t.radarStealth) continue;
+      const d = Math.hypot(s.x - p.x, s.y - p.y);
+      if (d < nd) { nd = d; near = s; }
+    }
+    if (near && nd > 1500) {
+      const ang = Math.atan2(near.y - p.y, near.x - p.x);
+      ctx.save();
+      ctx.globalAlpha = 0.4;
+      ctx.translate(vw / 2 + Math.cos(ang) * 62, vh / 2 + Math.sin(ang) * 62);
+      ctx.rotate(ang);
+      ctx.beginPath();
+      ctx.moveTo(9, 0); ctx.lineTo(-5, -6); ctx.lineTo(-2, 0); ctx.lineTo(-5, 6);
+      ctx.closePath();
+      ctx.fillStyle = '#fa8';
+      ctx.fill();
+      ctx.restore();
+      txt((nd / 1000).toFixed(1) + 'km', vw / 2 + Math.cos(ang) * 84, vh / 2 + Math.sin(ang) * 84 + 4, 10, 'rgba(255,170,130,0.4)', 'center', 600);
+    }
+  }
+
   function drawHUD() {
     const p = G.player;
     if (!p) return;
     const narrow = T.active && vw < 640;   // phone layout
+    drawContacts();
 
     // energy bar with segment ticks + glow cap
     const bw = Math.min(380, vw - 40), bx = vw / 2 - bw / 2, by = narrow ? 60 : 16;
@@ -3084,6 +3184,7 @@
     G.online = false;
     if (G.net) { try { G.net.close(); } catch (e) { } G.net = null; }
     G.combo = 0; G.lastKillT = -99; G.banner = null;
+    G.contacts.clear(); G.contactFx.length = 0;
     const C = WORLD / 2;
     let s;
     if (mode === 'duel') {

@@ -21,7 +21,7 @@ const path = require('path');
 const SIM = require('./sim.js');
 
 const PORT = parseInt(process.env.PORT || process.argv[2] || '8666', 10);
-const BOTS = parseInt(process.env.BOTS || '12', 10);
+const BOTS = parseInt(process.env.BOTS || '14', 10);
 const MODE = (process.env.MODE || 'teams').toLowerCase(); // 'teams' | 'core' | 'ffa'
 const GOAL = parseInt(process.env.GOAL || (MODE === 'core' ? '20' : '30'), 10);
 const ROOT = __dirname;
@@ -229,7 +229,7 @@ if (TEAMMODE) {
     b.ai.skill = 0.62;
   });
 }
-for (let i = 0; i < 40; i++) {
+for (let i = 0; i < 60; i++) {
   const p = SIM.randClearPoint(W);
   SIM.addPrize(W, p.x, p.y);
 }
@@ -367,7 +367,7 @@ function rebuildWorld(style) {
     W.nextId = Math.max(W.nextId, s.id + 1);
     if (!s.remote && !s.dormant) SIM.spawnShip(W, s);
   }
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 60; i++) {
     const p = SIM.randClearPoint(W);
     SIM.addPrize(W, p.x, p.y);
   }

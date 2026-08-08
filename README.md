@@ -20,14 +20,21 @@ multikill callouts, and matches short enough to always want one more.
 | **Squad Battle** (`2` or `Enter`) | 3v3 team dogfight vs bots — blue vs red, no friendly fire, anchored team spawns, wingmen that hunt with you. First to 15. Every ship keeps its own identity color — team reads from the blue/red halo ring, nameplates, and radar. |
 | **The Zone** (`3`) | Drop into the persistent living world — no match, no clock. The zone fights on while you're at the title screen and remembers everything when you return. |
 
-All of it plays out across a **vast sector** — a 512×512-tile map (8192px)
-that takes upward of twenty seconds to cross at full burn. The population
-concentrates in the mid-sector around the arena, so fights are easy to find,
-while the frontier beyond is open space for prize runs and long hypersonic
-chases — the starfield streaks with your speed. The corner radar is a
-**local scanner**, not a full-map view: it covers the space around you and
-shows your position on a lettered 16×16 sector grid (`SECTOR H8`), so a
-contact sliding in from its edge is something you hunt down.
+All of it plays out across a **vast sector at the classic zone scale** — a
+1024×1024-tile map (16384px) that takes most of a minute to cross at full
+burn. The population concentrates in the mid-sector around the arena, so
+fights are easy to find, while the enormous frontier beyond is open space
+for prize runs and long hypersonic chases — the starfield streaks with
+your speed. The corner radar is a **local scanner**, not a full-map view:
+it covers the space around you and shows your position on a lettered
+16×16 sector grid (`SECTOR H8`).
+
+Encounters are **events**: when a hostile enters your radar bubble you get
+a sonar **CONTACT ping** — target brackets if they're on screen, a bearing
+chevron with range if they're not — and the adaptive soundtrack surges.
+Stealth hulls arrive unannounced; that's their job. And when you're alone
+in the deep, a faint **hunt compass** points at the nearest hostile with
+its range, so every trek is aimed at a fight.
 | **Hold the Core** (`4`) | 3v3 objective mode: hold the glowing center ring **alone** for 3 seconds to score a point. First to 20. Forces the fight into one shared arena. |
 | **Online** (`O`) | Real multiplayer with rounds, MVPs, side swaps, an **Elo duel ladder**, and persistent pilot stats. `MODE=teams` (default), `MODE=core`, or `MODE=ffa`. |
 
