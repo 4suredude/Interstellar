@@ -1509,7 +1509,10 @@
         const d = Math.hypot(s.x - G.player.x, s.y - G.player.y);
         if (d < 1900) {
           const seen = G.contacts.get(s.id);
-          if (seen === undefined || G.time - seen > 18) {
+          // just spawned? prime the board silently — pings announce NEW
+          // arrivals, not the crowd that was already here when you docked
+          const quiet = G.player.safe > 1.2;
+          if ((seen === undefined || G.time - seen > 18) && !quiet && G.contactFx.length < 4) {
             G.contactFx.push({ id: s.id, t: 0 });
             sndContact();
             MUS.pulse = Math.min(1, MUS.pulse + 0.3);

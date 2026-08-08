@@ -29,6 +29,16 @@ your speed. The corner radar is a **local scanner**, not a full-map view:
 it covers the space around you and shows your position on a lettered
 16×16 sector grid (`SECTOR H8`).
 
+The sector is **open space with deliberate architecture** — nothing is
+scattered at random. A citadel ring guards the arena at the heart; six
+**guard stations** (concentric forts, cross-armed dock stations, shipyards
+with rows of hangar berths) sit on the approach radius, so you pass them
+on every run to the core; three **frontier depots** wait deep in the
+black; **asteroid belts** sweep the sector in navigable arcs; and lone
+**derelicts** drift as landmarks. Every installation matters: a third of
+all greens cache around bases, so stations are supply depots — worth
+flying to, and worth fighting over.
+
 Encounters are **events**: when a hostile enters your radar bubble you get
 a sonar **CONTACT ping** — target brackets if they're on screen, a bearing
 chevron with range if they're not — and the adaptive soundtrack surges.

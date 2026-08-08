@@ -250,10 +250,12 @@
     fillRect(0, 0, MAPS, 2, 1); fillRect(0, MAPS - 2, MAPS, 2, 1);
     fillRect(0, 0, 2, MAPS, 1); fillRect(MAPS - 2, 0, 2, MAPS, 1);
 
-    // open battlegrounds: big fields where dogfights happen in clean space.
-    // Structures can't spawn in them, and stragglers get carved out after.
+    // The sector is OPEN SPACE. What structure exists was BUILT — or broke
+    // apart out here. The architecture has logic: a citadel at the heart of
+    // the sector, a ring of guard stations on the approaches to the core, a
+    // few frontier depots deep in the black, asteroid belts where rubble
+    // actually belongs, and the odd drifting derelict as a landmark.
     const MC = MAPS / 2;
-    const SC = (MAPS * MAPS) / (192 * 192);   // area vs the original compact map
     const clearings = [
       { x: MC, y: MC, r: 30 },            // arena + its approaches
       { x: MC - 60, y: MC, r: 26 },       // west staging field (blue flank)
@@ -261,43 +263,112 @@
       { x: MC, y: MC - 62, r: 20 },       // north field
       { x: MC, y: MC + 62, r: 20 },       // south field
     ];
-    // open battlefields scattered through the frontier
-    for (let i = 0; i < Math.round(2 * SC); i++) {
-      clearings.push({ x: 28 + rn(MAPS - 56), y: 28 + rn(MAPS - 56), r: 15 + rn(9) });
-    }
     const inClearing = (x, y, margin) =>
       clearings.some(cl => hyp(x - cl.x, y - cl.y) < cl.r + (margin || 0));
 
-    // slightly sparser per-area than the old map: deep space should feel open
-    const structures = Math.round((style === 'gauntlet' ? 34 : style === 'rings' ? 20 : 50) * SC);
-    for (let i = 0; i < structures; i++) {
-      const cx = 8 + rn(MAPS - 16), cy = 8 + rn(MAPS - 16);
-      if (inClearing(cx, cy, 6)) continue;   // keep the battlegrounds open
-      switch (rn(5)) {
-        case 0: fillRect(cx, cy, 2 + rn(5), 2 + rn(5), 1); break;
-        case 1: {
-          const w = 8 + rn(7), h = 8 + rn(7);
-          fillRect(cx, cy, w, 1, 1); fillRect(cx, cy + h - 1, w, 1, 1);
-          fillRect(cx, cy, 1, h, 1); fillRect(cx + w - 1, cy, 1, h, 1);
-          fillRect(cx + 2 + rn(Math.max(1, w - 5)), cy, 2, 1, 0);
-          fillRect(cx, cy + 2 + rn(Math.max(1, h - 5)), 1, 2, 0);
-          break;
+    const bases = [];
+    const nearBase = (x, y, m) => bases.some(b => hyp(x - b.x, y - b.y) < b.r + (m || 0));
+    // wallRect: rectangle wall with centered gates on every side — the
+    // symmetric, gated look of something DESIGNED
+    const wallRect = (x0, y0, x1, y1, g) => {
+      const mx = (x0 + x1) >> 1, my = (y0 + y1) >> 1;
+      for (let x = x0; x <= x1; x++)
+        if (Math.abs(x - mx) > g) { set(x, y0, 1); set(x, y1, 1); }
+      for (let y = y0; y <= y1; y++)
+        if (Math.abs(y - my) > g) { set(x0, y, 1); set(x1, y, 1); }
+    };
+    const stampBase = (bx, by, kind) => {
+      bx = Math.round(bx); by = Math.round(by);
+      if (kind === 0) {
+        // FORT: concentric walled compound — gates on all four approaches,
+        // corner bastions, a command block at the heart
+        const h = 11 + rn(4);
+        wallRect(bx - h, by - h, bx + h, by + h, 2);
+        wallRect(bx - h + 5, by - h + 5, bx + h - 5, by + h - 5, 2);
+        fillRect(bx - 1, by - 1, 3, 3, 1);
+        for (const [ux, uy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]])
+          fillRect(bx + ux * h - 1, by + uy * h - 1, 3, 3, 1);
+        bases.push({ x: bx, y: by, r: h + 3 });
+      } else if (kind === 1) {
+        // STATION: cross-armed dock — a hollow core, four flight corridors,
+        // docking bays with mouths open to space at each arm's end
+        const L = 9 + rn(4);
+        fillRect(bx - 2, by - 2, 5, 5, 1);
+        fillRect(bx - 1, by - 1, 3, 3, 0);
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          for (let k = 3; k <= L + 1; k++) {
+            set(bx + dx * k + dy * 2, by + dy * k + dx * 2, 1);
+            set(bx + dx * k - dy * 2, by + dy * k - dx * 2, 1);
+          }
+          const px = bx + dx * (L + 3), py = by + dy * (L + 3);
+          fillRect(px - 2, py - 2, 5, 5, 1);
+          fillRect(px - 1, py - 1, 3, 3, 0);
+          if (dx === 1) fillRect(px + 2, py - 1, 1, 3, 0);
+          else if (dx === -1) fillRect(px - 2, py - 1, 1, 3, 0);
+          else if (dy === 1) fillRect(px - 1, py + 2, 3, 1, 0);
+          else fillRect(px - 1, py - 2, 3, 1, 0);
         }
-        case 2: {
-          const l = 3 + rn(4);
-          fillRect(cx - l, cy, l * 2 + 1, 1, 1); fillRect(cx, cy - l, 1, l * 2 + 1, 1);
-          break;
-        }
-        case 3: {
-          const len = 5 + rn(6), dir = rng() < 0.5 ? 1 : -1;
-          for (let k = 0; k < len; k++) { set(cx + k, cy + k * dir, 1); set(cx + k + 1, cy + k * dir, 1); }
-          break;
-        }
-        case 4:
-          for (let k = 0; k < 4 + rn(4); k++)
-            fillRect(cx + rn(9) - 4, cy + rn(9) - 4, 1 + rn(2), 1 + rn(2), 1);
-          break;
+        bases.push({ x: bx, y: by, r: L + 6 });
+      } else {
+        // YARD: hangar rows behind a gated perimeter — a shipyard, its
+        // berths lined up with mechanical regularity
+        const w = 12 + rn(4), hh = 8 + rn(3);
+        wallRect(bx - w, by - hh, bx + w, by + hh, 3);
+        for (const ry of [by - 4, by + 4])
+          for (let x = bx - w + 3; x <= bx + w - 3; x++)
+            if (Math.abs(x - bx) > 2) set(x, ry, 1);
+        bases.push({ x: bx, y: by, r: Math.max(w, hh) + 3 });
       }
+    };
+
+    // guard stations ring the core at the approach radius — you pass them
+    // on every run into the arena
+    const nGuard = style === 'rings' ? 4 : 6;
+    for (let i = 0; i < nGuard; i++) {
+      const ang = i / nGuard * TAU + rng() * 0.5;
+      const rad = MAPS * (0.2 + rng() * 0.08);
+      stampBase(MC + Math.cos(ang) * rad, MC + Math.sin(ang) * rad, rn(3));
+    }
+    // frontier depots: destinations deep in the black
+    for (let i = 0, placed = 0; i < 40 && placed < 3; i++) {
+      const ang = rng() * TAU;
+      const rad = MAPS * (0.42 + rng() * 0.22);
+      const bx = MC + Math.cos(ang) * rad, by = MC + Math.sin(ang) * rad;
+      if (bx < 45 || by < 45 || bx > MAPS - 45 || by > MAPS - 45) continue;
+      if (nearBase(bx, by, 30)) continue;
+      stampBase(bx, by, rn(3));
+      placed++;
+    }
+
+    // asteroid belts: rubble lives in BANDS around the sector, not
+    // sprinkled everywhere — navigable arcs with real gaps
+    const nBelt = style === 'rings' ? 1 : style === 'gauntlet' ? 2 : 3;
+    for (let b = 0; b < nBelt; b++) {
+      const a0 = rng() * TAU, span = 0.6 + rng() * 1.0;
+      const rad = MAPS * (0.3 + rng() * 0.16);
+      const wob = 5 + rn(8);
+      const steps = Math.round(rad * span);
+      for (let i = 0; i < steps; i++) {
+        if (rng() < 0.62) continue;
+        const ang = a0 + (i / steps) * span;
+        const rr = rad + (rng() - 0.5) * wob * 2;
+        const x = Math.round(MC + Math.cos(ang) * rr), y = Math.round(MC + Math.sin(ang) * rr);
+        if (x < 6 || y < 6 || x > MAPS - 6 || y > MAPS - 6) continue;
+        if (inClearing(x, y, 4) || nearBase(x, y, 8)) continue;
+        fillRect(x, y, 1 + rn(3), 1 + rn(3), 1);
+      }
+    }
+
+    // derelicts: lone broken hulls drifting in the deep — landmarks, cover,
+    // and proof that people flew out here once
+    for (let i = 0; i < 26; i++) {
+      const x = 30 + rn(MAPS - 60), y = 30 + rn(MAPS - 60);
+      if (inClearing(x, y, 10) || nearBase(x, y, 16) || hyp(x - MC, y - MC) < 60) continue;
+      const w = 4 + rn(5), h = 3 + rn(4);
+      fillRect(x, y, w, 1, 1); fillRect(x, y + h, w, 1, 1);
+      fillRect(x, y, 1, h, 1);
+      if (rng() < 0.6) fillRect(x + w - 1, y, 1, h, 1);
+      fillRect(x + 1 + rn(Math.max(1, w - 2)), y, 2, 1, 0);   // hull breach
     }
 
     const C = MAPS / 2, AR = 21;
@@ -331,7 +402,7 @@
     }
     if (style === 'gauntlet') {
       // long broken corridor walls channel the fights into lanes
-      for (let i = 0; i < Math.round(10 * MAPS / 192); i++) {
+      for (let i = 0; i < 14; i++) {
         const horiz = rng() < 0.5;
         const len = 40 + rn(80);
         const px = 10 + rn(MAPS - 20 - (horiz ? len : 0));
@@ -347,17 +418,12 @@
         }
       }
     }
-    for (let i = 0; i < 12; i++) {
-      const ang = i / 12 * TAU + 0.4;
-      const sx = Math.round(C + Math.cos(ang) * MAPS * 0.36);
-      const sy = Math.round(C + Math.sin(ang) * MAPS * 0.36);
-      for (let ty = -4; ty <= 4; ty++)
-        for (let tx = -4; tx <= 4; tx++)
-          if (tx * tx + ty * ty <= 18) set(sx + tx, sy + ty, 0);
-    }
     fillRect(0, 0, MAPS, 2, 1); fillRect(0, MAPS - 2, MAPS, 2, 1);
     fillRect(0, 0, 2, MAPS, 1); fillRect(MAPS - 2, 0, 2, MAPS, 1);
     W.map = m;
+    // bases in world px — prize caches spawn around them, giving every
+    // installation a reason to be visited (and fought over)
+    W.bases = bases.map(b => ({ x: (b.x + 0.5) * TILE, y: (b.y + 0.5) * TILE, r: b.r * TILE }));
   }
 
   function randClearPoint(W) {
@@ -1081,7 +1147,14 @@
       if (W.prizeT <= 0) {
         W.prizeT = 1.4;
         if (W.prizes.length < PRIZE_CAP) {
-          const p = randClearPoint(W);
+          // a third of the greens cache around installations — bases are
+          // supply depots, worth flying to and worth fighting over
+          let p = null;
+          if (W.bases && W.bases.length && Math.random() < 0.35) {
+            const b = W.bases[irand(W.bases.length)];
+            p = findClearNear(W, b.x + rand(-0.6, 0.6) * b.r, b.y + rand(-0.6, 0.6) * b.r);
+          }
+          if (!p) p = randClearPoint(W);
           const pr = addPrize(W, p.x, p.y);
           ev(W, { e: 'prizeSpawn', prize: pr.id, x: pr.x, y: pr.y });
         }
