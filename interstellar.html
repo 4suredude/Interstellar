@@ -116,7 +116,9 @@
   const rand = (a, b) => a === undefined ? Math.random() : a + Math.random() * (b - a);
   const irand = n => (Math.random() * n) | 0;
   const pick = arr => arr[irand(arr.length)];
-  const hyp = Math.hypot;
+  // 2-arg hypot without Math.hypot's overflow-safe scaling — ~5x faster in
+  // the collision loops, and our operands never exceed the world size
+  const hyp = (a, b) => Math.sqrt(a * a + b * b);
   function angleNorm(a) { a = (a + Math.PI) % TAU; if (a < 0) a += TAU; return a - Math.PI; }
   const dist2 = (a, b) => hyp(a.x - b.x, a.y - b.y);
 
@@ -711,8 +713,10 @@
   });
   const qKey = (qx, qy) => qy * GRID + qx;
   function terrOwner(W, x, y) {
-    const q = quadOf(x, y);
-    const t = W.terr && W.terr[qKey(q.qx, q.qy)];
+    // inlined quadrant math — this runs per teamed ship per step
+    if (!W.terr) return 0;
+    const qx = clamp((x / QUADPX) | 0, 0, GRID - 1), qy = clamp((y / QUADPX) | 0, 0, GRID - 1);
+    const t = W.terr[qy * GRID + qx];
     return t ? t.own : 0;
   }
   function terrInit(W) {
@@ -730,10 +734,20 @@
     const pres = {};
     for (const s of W.ships) {
       if (s.dead || !s.team || s.team > 4) continue;
-      const q = quadOf(s.remote ? s.x : s.x, s.remote ? s.y : s.y);
+      const q = quadOf(s.x, s.y);
       const k = qKey(q.qx, q.qy);
       const row = pres[k] || (pres[k] = {});
       row[s.team] = (row[s.team] || 0) + 1;
+    }
+    // capture progress erodes in ABSENCE too — 44s of pressure must not sit
+    // frozen forever in an empty quadrant waiting for one ship to finish it
+    for (const k in W.terr) {
+      if (pres[k]) continue;
+      const T = W.terr[k];
+      for (const tm in T.p) {
+        T.p[tm] = Math.max(0, T.p[tm] - tick * 0.5);
+        if (!T.p[tm]) delete T.p[tm];
+      }
     }
     for (const k in pres) {
       const kn = +k, qx = kn % GRID, qy = (kn / GRID) | 0;
@@ -985,8 +999,12 @@
     ev(W, { e: 'gun', id: s.id, x: s.x, y: s.y, level: s.gunLevel, dmg, bounces, shots });
     return true;
   }
+  const fin = v => Number.isFinite(v);
   function injectGun(W, owner, msg) {
-    spawnBullets(W, owner, msg.shots, msg.level, msg.dmg, msg.bounces);
+    if (!Array.isArray(msg.shots)) return;
+    for (const s of msg.shots) if (!s || !fin(s.x) || !fin(s.y) || !fin(s.vx) || !fin(s.vy)) return;
+    const dmg = clamp(+msg.dmg || 0, 0, 900);   // negative dmg would HEAL targets
+    spawnBullets(W, owner, msg.shots, msg.level, dmg, clamp(+msg.bounces || 0, 0, 3));
   }
 
   function fireBomb(W, s) {
@@ -1009,10 +1027,11 @@
     return true;
   }
   function injectBomb(W, owner, msg) {
+    if (!fin(msg.x) || !fin(msg.y) || !fin(msg.vx) || !fin(msg.vy)) return;
     W.bombs.push({
       x: msg.x, y: msg.y, vx: msg.vx, vy: msg.vy,
-      life: 3.4, level: msg.level, bounces: msg.bounces,
-      prox: Math.min(100, msg.prox || 15), owner,
+      life: 3.4, level: clamp(+msg.level || 1, 1, 3), bounces: clamp(+msg.bounces || 0, 0, 5),
+      prox: clamp(+msg.prox || 15, 0, 100), owner,
     });
   }
 
@@ -1044,7 +1063,7 @@
     ev(W, { e: 'repel', id: s.id, x: s.x, y: s.y });
     return true;
   }
-  function injectRepel(W, owner, msg) { repelAt(W, owner, msg.x, msg.y); }
+  function injectRepel(W, owner, msg) { if (fin(msg.x) && fin(msg.y)) repelAt(W, owner, msg.x, msg.y); }
 
   function burstShots(x, y, vx, vy, radius) {
     const shots = [];
@@ -1067,7 +1086,8 @@
     return true;
   }
   function injectBurst(W, owner, msg) {
-    spawnBullets(W, owner, burstShots(msg.x, msg.y, msg.vx, msg.vy, msg.radius), 2, 240, 3);
+    if (!fin(msg.x) || !fin(msg.y)) return;
+    spawnBullets(W, owner, burstShots(msg.x, msg.y, +msg.vx || 0, +msg.vy || 0, clamp(+msg.radius || 90, 0, 200)), 2, 240, 3);
   }
 
   function fireRocket(W, s) {
@@ -1401,8 +1421,8 @@
       const ms = W.motherships && W.motherships[s.team];
       if (ms && hyp(ms.x - s.x, ms.y - s.y) < 700) rech *= 2.4;
       else if (terrOwner(W, s.x, s.y) === s.team) rech *= 1.3;  // held ground favors its holders
-      for (const o of W.ships) {
-        if (o === s || o.dead || o.team !== s.team || o.type !== 'warden') continue;
+      for (const o of (W._wardens || [])) {
+        if (o === s || o.team !== s.team) continue;
         if (hyp(o.x - s.x, o.y - s.y) < 170) { rech *= 1.35; break; }
       }
     }
@@ -1576,7 +1596,7 @@
           const R2 = (bt / 6) * 3200;        // expanding front
           for (const s of W.ships) {
             if (s.dead || s.remote) continue;
-            if (s.novaT > 0) { s.novaT -= dt; continue; }
+            if (s.novaT > 0) continue;       // grace timer decays in the hazard loop
             const d = hyp(s.x - EVT.x, s.y - EVT.y);
             if (Math.abs(d - R2) < 170) {
               const inv = 1 / Math.max(1, d);
@@ -1630,6 +1650,8 @@
         if (s.dead || s.remote) continue;
         if (s.rockT > 0) s.rockT -= dt;
         if (s.wormT > 0) s.wormT -= dt;
+        if (s.novaT > 0) s.novaT -= dt;   // decays ALWAYS, not only mid-nova —
+                                          // stale grace must not shield the next collapse
         if (s.rockT <= 0 && hyp(s.x - W.danger.x, s.y - W.danger.y) < W.danger.r + 250) {
           for (const rk of W.rocks) {
             const q = rockAt(W, rk, W.time);
@@ -1660,6 +1682,10 @@
         }
       }
     }
+    // per-step warden roster: keeps the aura check O(ships), not O(ships^2)
+    const wl = W._wardens || (W._wardens = []);
+    wl.length = 0;
+    for (const o of W.ships) if (!o.dead && o.team && o.type === 'warden') wl.push(o);
     for (const s of W.ships) updateShip(W, s, dt);
     updateBullets(W, dt);
     updateBombs(W, dt);
@@ -1699,7 +1725,7 @@
   const GLOBAL = typeof window !== 'undefined' ? window : globalThis;
   const SIM = GLOBAL.SIM;
   const { TAU, TILE, MAPS, WORLD, STEP, SHIP_ORDER, SHIP_TYPES, clamp, rand, angleNorm } = SIM;
-  const hyp = Math.hypot;
+  const hyp = (a, b) => Math.sqrt(a * a + b * b);
   const irand = n => (Math.random() * n) | 0;
 
   // ---------------------------------------------------------------- state
@@ -1716,7 +1742,7 @@
     cam: { x: WORLD / 2, y: WORLD / 2 }, shake: 0, hitFlash: 0,
     sel: 0, best: 0, deathBy: '',
     // MMO layer: squad allegiance, credits, permanent upgrades, quadrant
-    zoneTeam: 0, credits: 0, relics: 0, upg: {}, mmo: false, upgOpen: false, quad: '', evtSeen: -1,
+    zoneTeam: 0, credits: 0, relics: 0, upg: {}, mmo: false, upgOpen: false, quad: '', quadIdx: -1, evtSeen: -1,
     mode: 'ffa', pendingMode: 'squad', match: null,
     banner: null, lastKillT: -99, combo: 0, duelW: 0, duelL: 0,
     demoT: 0, demoShip: null,
@@ -1730,6 +1756,9 @@
   };
   const keys = Object.create(null);
   let canvas = null, ctx = null, vw = 1280, vh = 720, dpr = 1;
+  // world-space camera bounds, refreshed once per drawWorld / update tick
+  let camL = 0, camR = 0, camT = 0, camB = 0;
+  const nearCam = (x, y) => x > camL && x < camR && y > camT && y < camB;
   let vignette = null, bloomC = null, bloomCtx = null, filterOK = false;
 
   // ---------------------------------------------------------------- touch
@@ -2650,7 +2679,10 @@
   // ---------------------------------------------------------------- fx
   // particle budget shrinks in lean quality mode
   function partCap() { return G.qual === 0 ? 380 : 800; }
+  // particles are pure eye candy: never spawn them for action the camera
+  // can't see, or the cap fills with invisible glows from 40km away
   function spark(x, y, hue, n, speed) {
+    if (!nearCam(x, y)) return;
     for (let i = 0; i < n; i++) {
       if (G.parts.length > partCap()) return;
       const a = rand(0, TAU), sp = rand(0.2, 1) * speed;
@@ -2658,6 +2690,7 @@
     }
   }
   function puff(x, y, hue, n, speed, size) {
+    if (!nearCam(x, y)) return;
     for (let i = 0; i < n; i++) {
       if (G.parts.length > partCap()) return;
       const a = rand(0, TAU), sp = rand(0.1, 1) * speed;
@@ -2665,6 +2698,7 @@
     }
   }
   function debris(x, y, hue, n) {
+    if (!nearCam(x, y)) return;
     for (let i = 0; i < n; i++) {
       if (G.parts.length > partCap()) return;
       const a = rand(0, TAU), sp = rand(60, 320);
@@ -2676,6 +2710,7 @@
     }
   }
   function flash(x, y, size, hue) {
+    if (!nearCam(x, y)) return;
     G.parts.push({ x, y, vx: 0, vy: 0, life: 0.09, max: 0.09, hue, kind: 'flash', size });
   }
   function applyCapture(qx, qy, team) {
@@ -2685,6 +2720,7 @@
     }
     const F = SIM.FACTIONS[team];
     if (!F) return;
+    G.quadIdx = -1;   // territory changed under our feet: refresh the label
     const ref = String.fromCharCode(65 + qx) + (qy + 1);
     say(F.name + ' captured quadrant ' + ref + '.', 'hsl(' + F.hue + ',85%,70%)');
     if (G.player && G.player.team === team) {
@@ -2822,6 +2858,9 @@
             G.inStorm = true;   // suppress the arrival banner — this one's better
             banner('THE MAELSTROM', 'a wormhole swallowed you — the rim gate leads home', 3);
             MUS.pulse = 1;
+            // tell the zone: without this relay, other clients lerp our
+            // ghost across the whole 20km jump instead of showing the warp
+            if (G.online) netSend({ t: 'fire', kind: 'worm', x0: e.x0, y0: e.y0, x1: e.x1, y1: e.y1, hue: e.hue });
           }
           break;
         case 'capture':
@@ -2913,7 +2952,20 @@
   function serverURL() {
     try {
       const q = new URLSearchParams(GLOBAL.location.search).get('server');
-      if (q) return q.startsWith('ws') ? q : 'ws://' + q;
+      // ?server= points the client at an arbitrary zone that then drives
+      // every string in the UI — require an explicit confirm before trusting
+      // a cross-origin target from a link someone else may have crafted
+      if (q) {
+        const url = q.startsWith('ws') ? q : 'ws://' + q;
+        let host = '';
+        try { host = new URL(url.replace(/^ws/, 'http')).host; } catch (e) { }
+        if (host && host !== GLOBAL.location.host && !G._serverOk) {
+          let ok = false;
+          try { ok = GLOBAL.confirm && GLOBAL.confirm('Connect to a third-party zone server?\n\n' + host + '\n\nOnly do this if you trust it.'); } catch (e) { }
+          if (!ok) { /* fall through to same-origin/default */ }
+          else { G._serverOk = true; return url; }
+        } else if (host) return url;
+      }
       if (GLOBAL.location.protocol.startsWith('http')) {
         return (GLOBAL.location.protocol === 'https:' ? 'wss://' : 'ws://') + GLOBAL.location.host;
       }
@@ -2970,20 +3022,27 @@
     const count = dv.getUint16(9, true);
     const rt = nowSec();
     let off = 11;
-    for (let i = 0; i < count && off + 24 <= dv.byteLength; i++, off += 24) {
-      const id = dv.getUint16(off, true);
+    for (let i = 0; i < count && off + 26 <= dv.byteLength; i++, off += 26) {
+      const id = dv.getUint32(off, true);
       const s = W.byId.get(id);
       if (!s || !s.remote) continue;
-      const x = dv.getFloat32(off + 2, true), y = dv.getFloat32(off + 6, true);
-      const vx = dv.getFloat32(off + 10, true), vy = dv.getFloat32(off + 14, true);
-      const a = dv.getFloat32(off + 18, true);
-      const flags = dv.getUint8(off + 22);
-      const frac = dv.getUint8(off + 23) / 255;
+      const x = dv.getFloat32(off + 4, true), y = dv.getFloat32(off + 8, true);
+      const vx = dv.getFloat32(off + 12, true), vy = dv.getFloat32(off + 16, true);
+      const a = dv.getFloat32(off + 20, true);
+      const flags = dv.getUint8(off + 24);
+      const frac = dv.getUint8(off + 25) / 255;
       const dead = !!(flags & 1), th = (flags >> 1) & 1;
       if (s.dead && !dead) { s.snaps = []; s.safe = 2; s.x = x; s.y = y; }
       s.dead = dead;
       s.netX = x; s.netY = y; s.netVx = vx; s.netVy = vy; s.netA = a; s.netT = 0;
       if (!s.snaps) s.snaps = [];
+      // a teleport (wormhole, gate, warp) must SNAP the ghost, not sweep
+      // its interpolated hull across 20km of space
+      const lastSnap = s.snaps[s.snaps.length - 1];
+      if (lastSnap && hyp(x - lastSnap.x, y - lastSnap.y) > 2200) {
+        s.snaps.length = 0;
+        s.x = x; s.y = y;
+      }
       s.snaps.push({ rt, x, y, vx, vy, a, th, frac, dead });
       if (s.snaps.length > 24) s.snaps.shift();
     }
@@ -3025,6 +3084,7 @@
       case 'welcome': {
         G.myId = msg.id;
         G.contacts.clear(); G.contactFx.length = 0;
+        G.evtSeen = -1; G.quadIdx = -1; G.board = null;
         const team = msg.team || 0;
         G.zoneMode = msg.mode || 'teams';
         G.sideFlip = msg.flip || 0;
@@ -3134,6 +3194,21 @@
           else if (!msg.killer) say(v.name + ' was torn apart by the maelstrom', '#f96');
           else say(v.name + ' self-destructed', '#f88');
         }
+        // remote deaths never flow through the local sim's kill event, so
+        // the kill feel + economy must fire here too
+        if (G.player && msg.killer === G.player.id && msg.id !== G.player.id) {
+          sndKill();
+          if (G.time - G.lastKillT < 4.5) G.combo++; else G.combo = 1;
+          G.lastKillT = G.time;
+          if (G.combo === 2) banner('DOUBLE KILL', '');
+          else if (G.combo === 3) banner('TRIPLE KILL', '');
+          else if (G.combo >= 4) banner('KILLING FRENZY', G.combo + ' in a row');
+          if (G.mmo) {
+            const c = 30 + (Math.max(0, msg.bounty | 0));
+            G.credits += c; saveMMO();
+            say('+' + c + ' credits', '#fd8');
+          }
+        }
         break;
       }
       case 'score': {
@@ -3218,6 +3293,7 @@
       }
       case 'newmap': {
         if (!W) break;
+        G.evtSeen = -1; G.quadIdx = -1; G.board = null;
         const oldShips = W.ships.slice();
         const opts = Object.assign({}, W.opts, { seed: msg.seed, mapStyle: msg.style });
         G.W = SIM.createWorld(opts);
@@ -3228,6 +3304,7 @@
           s.snaps = [];
         }
         prerenderMap();
+        if (msg.prizes) for (const p of msg.prizes) SIM.addPrize(G.W, p[1], p[2], p[0]);
         if (G.player) SIM.spawnShip(G.W, G.player);
         SIM.drainEvents(G.W);
         say('Warped to a new ' + msg.style + ' sector', '#fd8');
@@ -3282,8 +3359,9 @@
   function mapChunk(chx, chy) {
     const key = chy * NCHUNK + chx;
     let ch = G.mapChunks.get(key);
-    if (ch) {
+    if (ch !== undefined) {
       // re-insert so Map order tracks recency and eviction is LRU
+      // (null is a cached EMPTY sentinel — most of space is empty)
       G.mapChunks.delete(key); G.mapChunks.set(key, ch);
       return ch;
     }
@@ -3299,13 +3377,20 @@
   function bakeChunk(chx, chy) {
     const W = G.W;
     const doc = GLOBAL.document;
+    // include a one-tile border ring so neighbours' glow bleeds in correctly
+    const tx0 = Math.max(0, chx * CHUNK_T - 1), ty0 = Math.max(0, chy * CHUNK_T - 1);
+    const tx1 = Math.min(MAPS, (chx + 1) * CHUNK_T + 1), ty1 = Math.min(MAPS, (chy + 1) * CHUNK_T + 1);
+    // ~99.5% of space is empty: an all-empty chunk gets NO canvas at all
+    // (a 512px transparent canvas is 1MB of pixels and a wasted blit)
+    let any = false;
+    outer: for (let ty = ty0; ty < ty1; ty++)
+      for (let tx = tx0; tx < tx1; tx++)
+        if (SIM.tileSolid(W, tx, ty)) { any = true; break outer; }
+    if (!any) return null;
     const cnv = doc.createElement('canvas');
     cnv.width = CHUNK_PX; cnv.height = CHUNK_PX;
     const c = cnv.getContext('2d');
     c.translate(-chx * CHUNK_PX, -chy * CHUNK_PX);
-    // include a one-tile border ring so neighbours' glow bleeds in correctly
-    const tx0 = Math.max(0, chx * CHUNK_T - 1), ty0 = Math.max(0, chy * CHUNK_T - 1);
-    const tx1 = Math.min(MAPS, (chx + 1) * CHUNK_T + 1), ty1 = Math.min(MAPS, (chy + 1) * CHUNK_T + 1);
     // Solid, chunky, bevelled tiles — the original's maps were rock and
     // steel, not wireframes. Deterministic per-tile hash varies the tone.
     const hash = (x, y) => {
@@ -3369,6 +3454,9 @@
   // ---------------------------------------------------------------- update
   function update(dt) {
     G.time += dt;
+    // spawn-side camera bounds (drawWorld re-tightens them for draw culls)
+    camL = G.cam.x - vw / 2 - 260; camR = G.cam.x + vw / 2 + 260;
+    camT = G.cam.y - vh / 2 - 260; camB = G.cam.y + vh / 2 + 260;
     if (G.state === 'play' && G.paused && !G.online) return; // no pausing the zone online
     const W = G.W;
     if (!W) return;
@@ -3397,10 +3485,16 @@
     // 2s of stability required so a boundary graze can't flap the score —
     // except the storm, which takes over immediately
     {
-      const tw = musThemeAt();
-      if (tw !== MUS.twPend) { MUS.twPend = tw; MUS.twT = 0; }
-      else MUS.twT += dt;
-      if (MUS.twT > 2 || tw === 'storm') MUS.themeWant = tw;
+      // sampled at ~10Hz — the 2s stability filter downstream makes finer
+      // sampling pointless, and musThemeAt allocates
+      G.themeT = (G.themeT || 0) + dt;
+      if (G.themeT > 0.1) {
+        G.themeT = 0;
+        const tw = musThemeAt();
+        if (tw !== MUS.twPend) { MUS.twPend = tw; MUS.twT = 0; }
+        else MUS.twT += 0.1;
+        if (MUS.twT > 2 || tw === 'storm') MUS.themeWant = tw;
+      }
     }
 
     // CONTACT pings: a hostile entering your radar bubble is announced —
@@ -3433,12 +3527,18 @@
       if (G.contactFx[i].t > 2.6) G.contactFx.splice(i, 1);
     }
 
-    // crossing a quadrant boundary is an event
+    // crossing a quadrant boundary is an event — gate the (allocating) name
+    // build on the integer quadrant index, which is what actually changes
     if (G.player && !G.player.dead && G.state === 'play') {
-      const qn = quadName(G.player.x, G.player.y);
-      if (qn !== G.quad) {
-        if (G.quad) banner('ENTERING ' + qn, '', 2);
-        G.quad = qn;
+      const qi = clamp((G.player.y / QUADPX) | 0, 0, SIM.GRID - 1) * SIM.GRID
+        + clamp((G.player.x / QUADPX) | 0, 0, SIM.GRID - 1);
+      if (qi !== G.quadIdx) {
+        G.quadIdx = qi;
+        const qn = quadName(G.player.x, G.player.y);
+        if (qn !== G.quad) {
+          if (G.quad) banner('ENTERING ' + qn, '', 2);
+          G.quad = qn;
+        }
       }
     }
 
@@ -3463,7 +3563,7 @@
 
     // thrust exhaust for every live thrusting ship
     for (const s of W.ships) {
-      if (s.dead || G.parts.length > partCap() - 20) continue;
+      if (s.dead || !nearCam(s.x, s.y) || G.parts.length > partCap() - 20) continue;
       const th = s.remote ? s.netTh : (s.ctl.thrust > 0 || s.rocketT > 0 ? 1 : 0);
       if (th && Math.random() < 0.7) {
         const rk = s.rocketT > 0;
@@ -3493,7 +3593,13 @@
     for (let i = G.parts.length - 1; i >= 0; i--) {
       const p = G.parts[i];
       p.life -= dt;
-      if (p.life <= 0) { G.parts.splice(i, 1); continue; }
+      if (p.life <= 0) {
+        // swap-pop: draw order is irrelevant for additive glows, and splice
+        // at the head memmoves the whole array
+        G.parts[i] = G.parts[G.parts.length - 1];
+        G.parts.pop();
+        continue;
+      }
       p.x += p.vx * dt; p.y += p.vy * dt;
       p.vx *= 1 - 2.2 * dt; p.vy *= 1 - 2.2 * dt;
       if (p.rotV) p.rot += p.rotV * dt;
@@ -3619,6 +3725,8 @@
   // flare stars, dust, nebulae — all parallax layers, all lit from the same
   // top-left as the ships, so flying feels like actually traveling.
   const stars = [];
+  const STAR_COLORS = {};        // memoized star color strings
+  let dustGroups = [[], [], [], []];
   const nebulae = [];
   const bgObjs = [];
   const dust = [];
@@ -3820,8 +3928,12 @@
           tw: rand(0, TAU), tint: tints[irand(tints.length)],
         });
     dust.length = 0;
-    for (let i = 0; i < 260; i++)
-      dust.push({ x: rand(0, 4000), y: rand(0, 4000), a: rand(0.15, 0.5) });
+    dustGroups = [[], [], [], []];
+    for (let i = 0; i < 260; i++) {
+      const d = { x: rand(0, 4000), y: rand(0, 4000), a: rand(0.15, 0.5) };
+      dust.push(d);
+      dustGroups[Math.min(3, (((d.a - 0.15) / 0.35) * 4) | 0)].push(d);
+    }
     nebulae.length = 0;
     const hues = [205, 275, 320, 185, 250, 160];
     for (let i = 0; i < 6; i++) {
@@ -3866,13 +3978,16 @@
     sky.addColorStop(1, '#020308');
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, vw, vh);
-    // farthest layer: unresolved star dust
+    // farthest layer: unresolved star dust — batched into 4 alpha groups so
+    // globalAlpha changes 4 times per frame instead of 260
     ctx.fillStyle = 'rgba(200,215,255,0.5)';
-    for (const d of dust) {
-      const sx = ((d.x - G.cam.x * 0.045) % (vw + 40) + vw + 40) % (vw + 40) - 20;
-      const sy = ((d.y - G.cam.y * 0.045) % (vh + 40) + vh + 40) % (vh + 40) - 20;
-      ctx.globalAlpha = d.a;
-      ctx.fillRect(sx, sy, 1, 1);
+    for (let gI = 0; gI < dustGroups.length; gI++) {
+      ctx.globalAlpha = 0.2 + gI * 0.1;
+      for (const d of dustGroups[gI]) {
+        const sx = ((d.x - G.cam.x * 0.045) % (vw + 40) + vw + 40) % (vw + 40) - 20;
+        const sy = ((d.y - G.cam.y * 0.045) % (vh + 40) + vh + 40) % (vh + 40) - 20;
+        ctx.fillRect(sx, sy, 1, 1);
+      }
     }
     ctx.globalAlpha = 1;
     // set pieces: galaxy, planets, black hole, flare stars (parallax-wrapped)
@@ -3923,17 +4038,21 @@
       const sx = ((st.x - G.cam.x * st.z) % (vw + 100) + vw + 100) % (vw + 100) - 50;
       const sy = ((st.y - G.cam.y * st.z) % (vh + 100) + vh + 100) % (vh + 100) - 50;
       const tw = 0.55 + 0.45 * Math.sin(G.time * 1.7 + st.tw);
-      const a = (0.3 + 0.55 * st.z * tw).toFixed(3);
+      // bucketed alpha + memoized color strings: no per-star string building
+      // or CSS color parsing (325 stars x 60fps was ~19k parses/sec)
+      const ab = ((0.3 + 0.55 * st.z * tw) * 20) | 0;
+      const key = st.tint + ab;
+      const col = STAR_COLORS[key] || (STAR_COLORS[key] = 'rgba(' + st.tint + ',' + (ab / 20).toFixed(2) + ')');
       if (streak > 0.04) {
         const L = streak * st.z * 0.09;
-        ctx.strokeStyle = 'rgba(' + st.tint + ',' + a + ')';
+        ctx.strokeStyle = col;
         ctx.lineWidth = st.size;
         ctx.beginPath();
         ctx.moveTo(sx, sy);
         ctx.lineTo(sx - pl.vx * L, sy - pl.vy * L);
         ctx.stroke();
       } else {
-        ctx.fillStyle = 'rgba(' + st.tint + ',' + a + ')';
+        ctx.fillStyle = col;
         ctx.fillRect(sx, sy, st.size, st.size);
       }
     }
@@ -4249,6 +4368,7 @@
 
   function drawShip(s) {
     if (s.dead) return;
+    if (s.x < camL - 60 || s.x > camR + 60 || s.y < camT - 60 || s.y > camB + 60) return;
     const isMe = s === G.player;
     const isAlly = s.team && G.player && G.player.team && s.team === G.player.team;
     const stealthy = s.t.stealth && !isMe && !isAlly;
@@ -4387,12 +4507,14 @@
       const x1 = Math.min(NCHUNK - 1, ((G.cam.x + vw / 2) / CHUNK_PX) | 0);
       const y1 = Math.min(NCHUNK - 1, ((G.cam.y + vh / 2) / CHUNK_PX) | 0);
       for (let cy = y0; cy <= y1; cy++)
-        for (let cx = x0; cx <= x1; cx++)
-          ctx.drawImage(mapChunk(cx, cy), cx * CHUNK_PX, cy * CHUNK_PX);
+        for (let cx = x0; cx <= x1; cx++) {
+          const im = mapChunk(cx, cy);
+          if (im) ctx.drawImage(im, cx * CHUNK_PX, cy * CHUNK_PX);
+        }
     }
 
-    const camL = G.cam.x - vw / 2 - 90, camR = G.cam.x + vw / 2 + 90;
-    const camT = G.cam.y - vh / 2 - 90, camB = G.cam.y + vh / 2 + 90;
+    camL = G.cam.x - vw / 2 - 90; camR = G.cam.x + vw / 2 + 90;
+    camT = G.cam.y - vh / 2 - 90; camB = G.cam.y + vh / 2 + 90;
 
     // faction motherships anchored in their fortress keeps
     if (W.motherships) {
@@ -4406,7 +4528,9 @@
     // THE MAELSTROM: storm boundary, flying rock, wormholes
     if (W.danger) {
       const D = W.danger;
-      if (D.x + D.r > camL && D.x - D.r < camR && D.y + D.r > camT && D.y - D.r < camB) {
+      // rocks orbit the storm, so one bounds test covers all 22 of them
+      const nearStorm = D.x + D.r > camL && D.x - D.r < camR && D.y + D.r > camT && D.y - D.r < camB;
+      if (nearStorm) {
         ctx.save();
         ctx.strokeStyle = 'rgba(255,95,60,0.3)';
         ctx.lineWidth = 3;
@@ -4419,7 +4543,7 @@
         ctx.beginPath(); ctx.arc(D.x, D.y, D.r - 16, 0, TAU); ctx.stroke();
         ctx.restore();
       }
-      for (const rk of W.rocks) {
+      for (const rk of nearStorm ? W.rocks : []) {
         const q = SIM.rockAt(W, rk, W.time);
         if (q.x < camL || q.x > camR || q.y < camT || q.y > camB) continue;
         ctx.save();
@@ -4561,6 +4685,7 @@
     }
 
     for (const p of W.prizes) {
+      if (p.x < camL || p.x > camR || p.y < camT || p.y > camB) continue;
       const pulse = 0.75 + 0.25 * Math.sin(G.time * 4 + p.phase);
       const fade = p.ttl < 4 && !G.online ? p.ttl / 4 : 1;
       ctx.save();
@@ -4619,6 +4744,7 @@
       ctx.restore();
     }
     for (const p of G.parts) {
+      if (p.x < camL || p.x > camR || p.y < camT || p.y > camB) continue;
       const f = clamp(p.life / p.max, 0, 1);
       if (p.kind === 'spark') {
         ctx.strokeStyle = 'hsla(' + p.hue + ',100%,68%,' + (f * 0.9).toFixed(3) + ')';
@@ -4691,8 +4817,13 @@
     ctx.lineWidth = 1;
     rr(x, y, w, h, 8); ctx.stroke();
   }
+  // memoized font strings: no per-call concatenation, and the canvas fast-
+  // paths assignment of an identical font string (tracking current state
+  // ourselves would break across save/restore)
+  const FONTS = {};
   function txt(str, x, y, size, color, align, weight) {
-    ctx.font = (weight || 600) + ' ' + size + 'px "Segoe UI", system-ui, sans-serif';
+    const k = (weight || 600) + '|' + size;
+    ctx.font = FONTS[k] || (FONTS[k] = (weight || 600) + ' ' + size + 'px "Segoe UI", system-ui, sans-serif');
     ctx.textAlign = align || 'left';
     ctx.fillStyle = color;
     ctx.fillText(str, x, y);
@@ -4966,7 +5097,12 @@
 
     // leaderboard (hidden on touch layouts — the radar takes its corner)
     if (!T.active) {
-      const board = G.W.ships.slice().sort((a, b) => b.score - a.score).slice(0, 6);
+      // refreshed at 4Hz — a fresh sort every frame is pure churn
+      if (!G.board || G.time - (G.boardT || 0) > 0.25) {
+        G.boardT = G.time;
+        G.board = G.W.ships.slice().sort((a, b) => b.score - a.score).slice(0, 6);
+      }
+      const board = G.board;
       const lw = 184, lx = vw - lw - 12;
       panel(lx, 12, lw, 26 + board.length * 17);
       txt('ZONE STANDINGS', lx + 10, 29, 10, '#68a', 'left', 700);
@@ -5049,17 +5185,28 @@
     ctx.beginPath();
     ctx.rect(rx, ry, R, R);
     ctx.clip();
-    // sample the sparse tile field live across the scanner window — space
-    // is ~99.5% empty, so this paints a handful of rects per frame
+    // sample the sparse tile field live across the scanner window — with a
+    // row-local chunk cache (consecutive samples share sparse chunks) and
+    // one batched fill instead of thousands of fillRects
     {
       const step = RW / R;               // world px per radar px
+      const TCH = 64, TCHROW = Math.ceil(MAPS / TCH);
+      const tiles = G.W.tiles;
+      let ck = -1, carr = null;
       ctx.fillStyle = '#41639f';
+      ctx.beginPath();
       for (let py = 0; py < R; py += 2) {
         const ty = ((wy + py * step) / TILE) | 0;
+        const cyk = (ty / TCH) | 0, tyi = (ty % TCH) * TCH;
         for (let px = 0; px < R; px += 2) {
-          if (SIM.tileSolid(G.W, ((wx + px * step) / TILE) | 0, ty)) ctx.fillRect(rx + px, ry + py, 2, 2);
+          const tx = ((wx + px * step) / TILE) | 0;
+          if (tx < 2 || ty < 2 || tx >= MAPS - 2 || ty >= MAPS - 2) { ctx.rect(rx + px, ry + py, 2, 2); continue; }
+          const k = ((tx / TCH) | 0) * TCHROW + cyk;
+          if (k !== ck) { ck = k; carr = tiles.get(k); }
+          if (carr && carr[tyi + (tx % TCH)]) ctx.rect(rx + px, ry + py, 2, 2);
         }
       }
+      ctx.fill();
     }
     ctx.strokeStyle = 'rgba(70,120,200,0.18)';
     ctx.lineWidth = 1;
@@ -5543,6 +5690,7 @@
     if (G.net) { try { G.net.close(); } catch (e) { } G.net = null; }
     G.combo = 0; G.lastKillT = -99; G.banner = null;
     G.contacts.clear(); G.contactFx.length = 0;
+    G.evtSeen = -1; G.quadIdx = -1; G.board = null;   // fresh world, fresh announcements
     const C = WORLD / 2;
     let s;
     if (mode === 'duel') {
@@ -5644,8 +5792,13 @@
       try { if (G.net) G.net.close(); } catch (e) { }
       G.net = null; G.online = false;
     }
-    // the wing stands down when their leader leaves
-    if (G.W && G.player) for (const b of G.W.ships) if (b.ai && b.ai.escort === G.player.id) b.ai.escort = 0;
+    // the wing stands down when their leader leaves — and the leader's ship
+    // LEAVES the persistent zone world, or every visit strands a zombie
+    // "You" that bots farm for kills and that pads its team's captures
+    if (G.W && G.player) {
+      for (const b of G.W.ships) if (b.ai && b.ai.escort === G.player.id) b.ai.escort = 0;
+      SIM.removeShip(G.W, G.player);
+    }
     G.player = null;
     G.chatOpen = false;
     G.match = null;

@@ -573,9 +573,9 @@ const SIM = require(path.join(ROOT, 'sim.js'));
         if (dv.getUint8(0) !== 2) continue;
         const count = dv.getUint16(9, true);
         let off = 11;
-        for (let k = 0; k < count && off + 24 <= dv.byteLength; k++, off += 24) {
-          if (dv.getUint16(off, true) === id) {
-            return { x: dv.getFloat32(off + 2, true), y: dv.getFloat32(off + 6, true) };
+        for (let k = 0; k < count && off + 26 <= dv.byteLength; k++, off += 26) {
+          if (dv.getUint32(off, true) === id) {
+            return { x: dv.getFloat32(off + 4, true), y: dv.getFloat32(off + 8, true) };
           }
         }
       }
@@ -616,11 +616,23 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     assert(B.msgs.some(m => m.t === 'chat' && m.text === 'hello zone'), 'public chat relayed');
     assert(!B.msgs.some(m => m.t === 'chat' && m.text === 'secret plan'), 'team chat stays private');
 
-    // death + score relay
+    // death + score relay — the killer must be NEAR the victim (anti-forgery),
+    // so Alice reports a position beside Bob (1234,2345) before the kill
+    A.ws.send(mkStateBuf(1260, 2360, 0, 0, 0, 0, 1, 1));
+    await new Promise(r => setTimeout(r, 150));
     B.ws.send(JSON.stringify({ t: 'death', killer: A.welcome.id, bounty: 5 }));
     await new Promise(r => setTimeout(r, 300));
     assert(A.msgs.some(m => m.t === 'death' && m.id === bId), 'A saw Bob\'s death');
     assert(A.msgs.some(m => m.t === 'score' && m.id === A.welcome.id && m.score >= 15), 'Alice got kill credit');
+
+    // anti-forgery: a kill claimed for a FAR-AWAY pilot is not credited
+    const cScore = (A.msgs.filter(m => m.t === 'score' && m.id === A.welcome.id).pop() || {}).score || 0;
+    A.ws.send(mkStateBuf(40000, 40000, 0, 0, 0, 0, 1, 1));   // Alice flies far off
+    await new Promise(r => setTimeout(r, 150));
+    B.ws.send(JSON.stringify({ t: 'death', killer: A.welcome.id, bounty: 200 }));
+    await new Promise(r => setTimeout(r, 300));
+    const cScore2 = (A.msgs.filter(m => m.t === 'score' && m.id === A.welcome.id).pop() || {}).score || 0;
+    assert(cScore2 === cScore, 'forged kill for a distant pilot is rejected (' + cScore + ' -> ' + cScore2 + ')');
     assert(A.msgs.some(m => m.t === 'prize+'), 'death dropped greens');
 
     // ---- duel ladder: challenge, accept, first to 5, elo updates

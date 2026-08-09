@@ -32,12 +32,22 @@ const MIME = {
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.png': 'image/png',
-  '.md': 'text/markdown; charset=utf-8',
-  '.json': 'application/json',
   '.ico': 'image/x-icon',
 };
+// exactly these paths are served — the game client and its assets, nothing
+// else in the deploy directory (not server.js, data/, or .git). PNGs under
+// assets/ are allowed by prefix+extension.
+const SERVE_FILES = new Set([
+  '/index.html', '/interstellar.html', '/client.js', '/sim.js', '/favicon.ico',
+]);
+const servable = p => SERVE_FILES.has(p) || (p.startsWith('/assets/') && p.endsWith('.png') && p.indexOf('/', 8) === 7);
 const httpServer = http.createServer((req, res) => {
-  let urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
+  // malformed percent-encoding throws synchronously; without this catch a
+  // single 18-byte GET (/%) would kill the whole process
+  let urlPath;
+  try { urlPath = decodeURIComponent((req.url || '/').split('?')[0]); }
+  catch (e) { res.writeHead(400); res.end(); return; }
+  if (urlPath.indexOf('\0') !== -1) { res.writeHead(400); res.end(); return; }  // NUL kills fs.readFile
   if (urlPath === '/status') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
     res.end(JSON.stringify(zoneStatus()));
@@ -50,14 +60,21 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
   if (urlPath === '/') urlPath = '/index.html';
+  // only the explicit game-file allow-list is served — the pilot DB, server
+  // source, and .git are invisible
+  if (!servable(urlPath)) { res.writeHead(404); res.end(); return; }
   const file = path.normalize(path.join(ROOT, urlPath));
-  if (!file.startsWith(ROOT)) { res.writeHead(403); res.end(); return; }
+  // real path-prefix test, not a string prefix (blocks sibling dirs like Ss.bak)
+  if (file !== ROOT && !file.startsWith(ROOT + path.sep)) { res.writeHead(403); res.end(); return; }
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404); res.end('not found'); return; }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff' });
     res.end(data);
   });
 });
+httpServer.maxConnections = 800;
+// last-resort backstop: never let one bad packet take the zone down
+process.on('uncaughtException', e => { try { log('uncaught: ' + (e && e.stack || e)); } catch (_) { } });
 
 // ---------------------------------------------------------------- websocket
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
@@ -75,18 +92,24 @@ function wsEncode(str, opcode) {
 }
 
 const clients = new Set();
+const byClientId = new Map();   // ship id -> client, for O(1) event crediting
 let nextClientSeq = 1;
 
 function wsHandle(sock) {
   const cl = {
     sock, buf: Buffer.alloc(0),
     id: 0, name: '', ship: null,       // ship = sim ghost after join
-    joined: false, lastSeen: Date.now(),
+    joined: false, lastSeen: Date.now(), connT: Date.now(),
+    fireAt: Object.create(null), msgTok: 6, msgTokT: Date.now(),
     seq: nextClientSeq++,
   };
   clients.add(cl);
   sock.on('data', chunk => {
-    cl.buf = Buffer.concat([cl.buf, chunk]);
+    // the common case is an empty carry buffer — skip the concat copy
+    cl.buf = cl.buf.length ? Buffer.concat([cl.buf, chunk]) : chunk;
+    // a socket that buffers a partial frame it never completes must not grow
+    // unbounded — the largest legitimate message is well under 64KB
+    if (cl.buf.length > 65536) { dropClient(cl); return; }
     try { wsDrain(cl); } catch (e) { dropClient(cl); }
   });
   sock.on('error', () => dropClient(cl));
@@ -106,9 +129,11 @@ function wsDrain(cl) {
       if (buf.length < 10) return;
       len = Number(buf.readBigUInt64BE(2)); off = 10;
     }
-    if (len > 1 << 20) { dropClient(cl); return; }   // 1MB sanity cap
+    if (len > 65536) { dropClient(cl); return; }     // 64KB frame cap
+    if (op >= 0x8 && len > 125) { dropClient(cl); return; }   // control frames are ≤125B (RFC6455)
+    if (!masked) { dropClient(cl); return; }         // clients MUST mask (RFC6455 §5.1)
     let mask = null;
-    if (masked) {
+    {
       if (buf.length < off + 4) return;
       mask = buf.slice(off, off + 4); off += 4;
     }
@@ -131,13 +156,21 @@ function wsDrain(cl) {
     onMessage(cl, msg);
   }
 }
+// a slow/non-reading client must not queue the whole broadcast stream in the
+// server heap — drop anyone whose socket backlog runs away
+function overBackpressure(cl) {
+  if (cl.sock.writableLength > 1 << 20) { dropClient(cl); return true; }
+  return false;
+}
 function sendTo(cl, obj) {
+  if (overBackpressure(cl)) return;
   try { cl.sock.write(wsEncode(JSON.stringify(obj))); } catch (e) { dropClient(cl); }
 }
 function broadcast(obj, except) {
   const frame = wsEncode(JSON.stringify(obj));
   for (const cl of clients) {
     if (cl === except || !cl.joined) continue;
+    if (overBackpressure(cl)) continue;
     try { cl.sock.write(frame); } catch (e) { dropClient(cl); }
   }
 }
@@ -145,6 +178,7 @@ function broadcastBin(buf) {
   const frame = wsFrame(buf, 0x2);
   for (const cl of clients) {
     if (!cl.joined) continue;
+    if (overBackpressure(cl)) continue;
     try { cl.sock.write(frame); } catch (e) { dropClient(cl); }
   }
 }
@@ -174,6 +208,7 @@ function onBinary(cl, buf) {
 function dropClient(cl) {
   if (!clients.has(cl)) return;
   clients.delete(cl);
+  if (cl.id) byClientId.delete(cl.id);
   try { cl.sock.destroy(); } catch (e) { }
   if (cl.joined && cl.ship) {
     log(cl.name + ' left the zone');
@@ -188,9 +223,16 @@ function dropClient(cl) {
   }
 }
 
-httpServer.on('upgrade', (req, sock) => {
+// optional Origin allow-list — set ALLOW_ORIGIN=https://your.site to stop
+// arbitrary pages from silently connecting their visitors to the zone
+const ALLOW_ORIGIN = (process.env.ALLOW_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean);
+httpServer.on('upgrade', (req, sock, head) => {
   const key = req.headers['sec-websocket-key'];
   if (!key || (req.headers.upgrade || '').toLowerCase() !== 'websocket') { sock.destroy(); return; }
+  if (ALLOW_ORIGIN.length) {
+    const origin = req.headers.origin || '';
+    if (!ALLOW_ORIGIN.includes(origin)) { sock.destroy(); return; }
+  }
   const accept = crypto.createHash('sha1').update(key + WS_GUID).digest('base64');
   sock.write(
     'HTTP/1.1 101 Switching Protocols\r\n' +
@@ -199,6 +241,8 @@ httpServer.on('upgrade', (req, sock) => {
     'Sec-WebSocket-Accept: ' + accept + '\r\n\r\n');
   sock.setNoDelay(true);
   wsHandle(sock);
+  // a frame arriving in the same TCP segment as the handshake would be lost
+  if (head && head.length) sock.emit('data', head);
 });
 
 // ---------------------------------------------------------------- zone
@@ -238,8 +282,10 @@ SIM.drainEvents(W);
 // ---------------------------------------------------------------- pilot db
 const DATA_DIR = path.join(ROOT, 'data');
 const PLAYERS_FILE = path.join(DATA_DIR, 'players.json');
-let PDB = {};
-try { PDB = JSON.parse(fs.readFileSync(PLAYERS_FILE, 'utf8')); } catch (e) { PDB = {}; }
+// null-prototype DB so a pilot named "__proto__"/"constructor" can't reach
+// Object.prototype and poison every stat write in the process
+let PDB = Object.create(null);
+try { PDB = Object.assign(Object.create(null), JSON.parse(fs.readFileSync(PLAYERS_FILE, 'utf8'))); } catch (e) { PDB = Object.create(null); }
 let saveTimer = null;
 function pdbSave() {
   if (saveTimer) return;
@@ -251,10 +297,21 @@ function pdbSave() {
     } catch (e) { }
   }, 3000);
 }
+const PDB_CAP = 5000;
 function pilot(name) {
   const key = name.toLowerCase();
   let p = PDB[key];
-  if (!p) p = PDB[key] = { name, elo: 1200, dw: 0, dl: 0, k: 0, d: 0, shots: 0, hits: 0, score: 0, seen: 0 };
+  if (!p) {
+    // evict the least-recently-seen pilot when the DB is full — bounds the
+    // disk/heap cost of join-spam with random names
+    const keys = Object.keys(PDB);
+    if (keys.length >= PDB_CAP) {
+      let oldest = keys[0];
+      for (const k of keys) if ((PDB[k].seen || 0) < (PDB[oldest].seen || 0)) oldest = k;
+      delete PDB[oldest];
+    }
+    p = PDB[key] = { name, elo: 1200, dw: 0, dl: 0, k: 0, d: 0, shots: 0, hits: 0, score: 0, seen: 0 };
+  }
   p.seen = Date.now();
   return p;
 }
@@ -273,12 +330,14 @@ function zoneStatus() {
     bots: W.ships.filter(s => s.bot && !s.dormant).length,
   };
 }
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 function statsPage(res) {
   const rows = ladderTop(20).map((p, i) =>
-    '<tr><td>' + (i + 1) + '</td><td>' + p.name.replace(/[<>&]/g, '') + '</td><td>' + p.elo +
-    '</td><td>' + p.dw + '–' + p.dl + '</td><td>' + p.k + '/' + p.d +
-    '</td><td>' + p.acc + '%</td><td>' + p.score + '</td></tr>').join('');
-  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    '<tr><td>' + (i + 1) + '</td><td>' + esc(p.name) + '</td><td>' + (p.elo | 0) +
+    '</td><td>' + (p.dw | 0) + '–' + (p.dl | 0) + '</td><td>' + (p.k | 0) + '/' + (p.d | 0) +
+    '</td><td>' + (p.acc | 0) + '%</td><td>' + (p.score | 0) + '</td></tr>').join('');
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'" });
   res.end('<!doctype html><title>Interstellar — ladder</title><style>body{background:#05070f;color:#cde;' +
     'font:14px system-ui;padding:40px}table{border-collapse:collapse}td,th{padding:6px 16px;' +
     'border-bottom:1px solid #1a2a4a;text-align:left}th{color:#8fc2ff}h1{color:#c8ecff}</style>' +
@@ -373,7 +432,9 @@ function rebuildWorld(style) {
   }
   SIM.drainEvents(W);
   for (const cl of clients) cl.vote = null;
-  broadcast({ t: 'newmap', seed: SEED, style });
+  // the fresh world's seeded prizes must travel too, or clients fly through
+  // invisible greens until the next natural spawn
+  broadcast({ t: 'newmap', seed: SEED, style, prizes: W.prizes.map(p => [p.id, Math.round(p.x), Math.round(p.y)]) });
   sysAll('Warped to a new ' + style + ' sector.');
 }
 const tk = { 1: 0, 2: 0 };
@@ -413,11 +474,14 @@ function endRound(winnerTeam, detail) {
   pdbSave();
 }
 function tallyTeamKill(killer, victim) {
-  if (!TEAMMODE || !victim || !victim.team) return;
-  if (killer && killer.team && killer.team !== victim.team) {
+  if (!TEAMMODE || !victim || !victim.team || victim.team > 2) return;
+  // marauders (team 5) play by no one's rules: their kills feed neither
+  // team's tally, and they can never be round MVP
+  if (killer && killer.marauder) return;
+  if (killer && killer.team && killer.team <= 2 && killer.team !== victim.team) {
     rk.set(killer.id, (rk.get(killer.id) || 0) + 1);
   }
-  const winnerTeam = killer && killer.team && killer.team !== victim.team
+  const winnerTeam = killer && killer.team && killer.team <= 2 && killer.team !== victim.team
     ? killer.team
     : (victim.team === 1 ? 2 : 1);   // suicide feeds the enemy
   tk[winnerTeam]++;
@@ -466,9 +530,12 @@ function scoreMsg(s) {
 }
 function sanitizeName(n) {
   n = String(n || '').replace(/[^\w\-\. ]/g, '').trim().slice(0, 14);
+  // reserved object keys make treacherous DB keys even with a null-proto map
+  if (/^(__proto__|constructor|prototype)$/i.test(n)) n = '';
   return n || 'Pilot' + (100 + ((Math.random() * 900) | 0));
 }
 
+let lastMapChange = 0;
 function onCommand(cl, line) {
   const parts = line.trim().split(/\s+/);
   const cmd = (parts.shift() || '').toLowerCase();
@@ -507,7 +574,13 @@ function onCommand(cl, line) {
       const joined = [...clients].filter(c => c.joined);
       const votes = joined.filter(c => c.vote === style).length;
       sysAll(cl.name + ' votes map ' + style + ' (' + votes + '/' + joined.length + ')');
-      if (votes > joined.length / 2) scheduleMapChange(style);
+      // needs ≥2 pilots (a lone pilot's 1 > 0.5 must not rebuild the world)
+      // and a 5-minute cooldown to blunt repeat/Sybil abuse
+      if (joined.length >= 2 && votes > joined.length / 2 &&
+          Date.now() - (lastMapChange || 0) > 300000) {
+        lastMapChange = Date.now();
+        scheduleMapChange(style);
+      }
       break;
     }
     case 'help':
@@ -518,11 +591,24 @@ function onCommand(cl, line) {
   }
 }
 
+const HAS = Object.prototype.hasOwnProperty;
+const hyp2 = (a, b) => a * a + b * b;
+const FIRE_GAP = { gun: 110, bomb: 950, burst: 750, repel: 650, blink: 3200, warp: 8000, worm: 1500 };
+// per-client token bucket: bounds chat/command/relic/prize/dmg flooding
+function msgAllowed(cl) {
+  const now = Date.now();
+  cl.msgTok = Math.min(8, cl.msgTok + (now - cl.msgTokT) / 250);   // ~4/s, burst 8
+  cl.msgTokT = now;
+  if (cl.msgTok < 1) return false;
+  cl.msgTok -= 1;
+  return true;
+}
 function onMessage(cl, msg) {
+  if (!msg || typeof msg !== 'object') return;
   switch (msg.t) {
     case 'join': {
       if (cl.joined) return;
-      if (!SIM.SHIP_TYPES[msg.ship]) return;
+      if (!HAS.call(SIM.SHIP_TYPES, msg.ship)) return;   // reject __proto__ etc.
       cl.name = sanitizeName(msg.name);
       if (findClientByName(cl.name)) cl.name = cl.name.slice(0, 11) + '.' + ((Math.random() * 90 + 10) | 0);
       cl.pilot = pilot(cl.name);
@@ -532,6 +618,7 @@ function onMessage(cl, msg) {
       ghost.elo = cl.pilot.elo;
       cl.ship = ghost;
       cl.id = ghost.id;
+      byClientId.set(cl.id, cl);
       cl.joined = true;
       sendTo(cl, {
         t: 'welcome', id: cl.id, hue, seed: SEED, team, goal: GOAL, mode: MODE,
@@ -547,10 +634,15 @@ function onMessage(cl, msg) {
       break;
     }
     case 'relic': {
-      // a pilot salvaged a relic slot: mark it and tell everyone else
+      // a pilot salvaged a relic slot: mark it and tell everyone else —
+      // but only if the slot was actually available (two claims in the
+      // same round trip must not both count) and the claimant is near it
+      if (!cl.joined || !cl.ship || !msgAllowed(cl)) return;
       const i = msg.slot | 0;
-      if (W.relicSlots && W.relicSlots[i]) {
-        W.relicSlots[i].taken = W.time;
+      const sl = W.relicSlots && W.relicSlots[i];
+      if (sl && (sl.taken < 0 || W.time - sl.taken >= 240) &&
+          hyp2(cl.ship.netX - sl.x, cl.ship.netY - sl.y) < 300 * 300) {
+        sl.taken = W.time;
         broadcast({ t: 'relic-', i }, cl);
       }
       break;
@@ -568,41 +660,65 @@ function onMessage(cl, msg) {
     }
     case 'fire': {
       const s = cl.ship;
-      if (!s || s.dead) return;
-      // rate + payload validation: the relay trusts clients, but caps abuse
+      if (!s || s.dead || !cl.joined) return;
+      // rate + payload validation: the relay trusts clients, but caps abuse.
+      // hasOwnProperty lookup so kind:'__proto__' can't sneak past the gate
       const now = Date.now();
-      const MIN_GAP = { gun: 110, bomb: 950, burst: 750, repel: 650, blink: 3200, warp: 8000 };
-      const gap = MIN_GAP[msg.kind];
-      if (gap == null) return;
-      cl.fireAt = cl.fireAt || {};
+      if (typeof msg.kind !== 'string' || !HAS.call(FIRE_GAP, msg.kind)) return;
+      const gap = FIRE_GAP[msg.kind];
       if (now - (cl.fireAt[msg.kind] || 0) < gap) { cl.strikes = (cl.strikes || 0) + 1; if (cl.strikes > 120) dropClient(cl); return; }
       cl.fireAt[msg.kind] = now;
+      // near the shooter's last reported position — no firing across the map
+      const near = (x, y) => Number.isFinite(x) && Number.isFinite(y) &&
+        hyp2(x - s.netX, y - s.netY) < 900 * 900;
+      // NEVER relay msg itself — build an explicit whitelisted frame per kind
+      let relay = null;
       if (msg.kind === 'gun') {
         if (!Array.isArray(msg.shots) || msg.shots.length > 4) return;   // twin cannons + multifire
-        if (!(msg.dmg <= 900) || !(msg.bounces <= 3)) return;
-        if (msg.shots.some(sh => !Number.isFinite(sh.x) || !Number.isFinite(sh.y) || Math.hypot(sh.vx, sh.vy) > 1500)) return;
+        if (!(+msg.dmg <= 900) || !(+msg.bounces <= 3)) return;
+        const shots = [];
+        for (const sh of msg.shots) {
+          if (!sh || !near(sh.x, sh.y)) return;
+          if (!(Math.abs(+sh.vx) <= 1500) || !(Math.abs(+sh.vy) <= 1500)) return;
+          shots.push({ x: +sh.x, y: +sh.y, vx: +sh.vx, vy: +sh.vy });
+        }
+        relay = { t: 'fire', kind: 'gun', id: cl.id, shots, level: +msg.level | 0, dmg: +msg.dmg, bounces: +msg.bounces | 0 };
+        cl.pilot.shots += shots.length;
+        SIM.injectGun(W, s, msg);
       } else if (msg.kind === 'bomb') {
-        if (!(msg.level >= 1 && msg.level <= 3) || !(msg.bounces <= 5) || Math.hypot(msg.vx, msg.vy) > 1300) return;
-        if (!(+msg.prox >= 0 && +msg.prox <= 100)) msg.prox = 15;
+        if (!(+msg.level >= 1 && +msg.level <= 3) || !(+msg.bounces <= 5)) return;
+        if (!near(msg.x, msg.y) || !(Math.abs(+msg.vx) <= 1300) || !(Math.abs(+msg.vy) <= 1300)) return;
+        const prox = (+msg.prox >= 0 && +msg.prox <= 100) ? +msg.prox : 15;
+        msg.prox = prox;
+        relay = { t: 'fire', kind: 'bomb', id: cl.id, x: +msg.x, y: +msg.y, vx: +msg.vx, vy: +msg.vy, level: +msg.level | 0, bounces: +msg.bounces | 0, prox };
+        SIM.injectBomb(W, s, msg);
+      } else if (msg.kind === 'burst') {
+        if (!near(msg.x, msg.y)) return;
+        relay = { t: 'fire', kind: 'burst', id: cl.id, x: +msg.x, y: +msg.y, vx: +msg.vx || 0, vy: +msg.vy || 0, radius: SIM.clamp(+msg.radius || 90, 0, 200) };
+        SIM.injectBurst(W, s, msg);
+      } else if (msg.kind === 'repel') {
+        if (!near(msg.x, msg.y)) return;
+        relay = { t: 'fire', kind: 'repel', id: cl.id, x: +msg.x, y: +msg.y };
+        SIM.injectRepel(W, s, msg);
+      } else {
+        // blink / warp are FX-only; whitelist their endpoints too
+        relay = { t: 'fire', kind: msg.kind, id: cl.id,
+          x0: +msg.x0 || 0, y0: +msg.y0 || 0, x1: +msg.x1 || 0, y1: +msg.y1 || 0, hue: +msg.hue || s.hue };
       }
-      // relay to everyone else, and mirror into the server sim so bots react
-      const relay = Object.assign({}, msg, { id: cl.id });
       broadcast(relay, cl);
-      if (msg.kind === 'gun') cl.pilot.shots += msg.shots.length;
-      if (msg.kind === 'gun') SIM.injectGun(W, s, msg);
-      else if (msg.kind === 'bomb') SIM.injectBomb(W, s, msg);
-      else if (msg.kind === 'burst') SIM.injectBurst(W, s, msg);
-      else if (msg.kind === 'repel') SIM.injectRepel(W, s, msg);
-      // 'blink'/'warp' are FX-only: ghost position catches up via state reports
       break;
     }
     case 'dmg': {
       // victim reporting a hit taken: accuracy credit + reaper leech credit
       if (!cl.joined) return;
+      if (!msgAllowed(cl)) return;
       const amount = Math.min(1500, Math.max(0, +msg.amount || 0));
       const att = W.byId.get(msg.att | 0);
       if (!att || !amount) return;
-      const acl = [...clients].find(c => c.id === att.id);
+      // the named attacker must actually be near the victim reporting the hit
+      const s = cl.ship;
+      if (s && hyp2((att.remote ? att.netX : att.x) - s.netX, (att.remote ? att.netY : att.y) - s.netY) > 1400 * 1400) return;
+      const acl = byClientId.get(att.id);
       if (acl) acl.pilot.hits++;
       if (att.t.leech) {
         const heal = Math.round(amount * att.t.leech);
@@ -622,23 +738,35 @@ function onMessage(cl, msg) {
       cl.pilot.d++;
       const killer = W.byId.get(msg.killer);
       const bounty = Math.max(0, Math.min(200, msg.bounty | 0));
-      if (killer && killer !== s) {
+      // a claimed killer must be a live ship near where the victim died —
+      // this blocks minting kills/score/elo for arbitrary or offline pilots
+      // (full prevention needs pilot auth; owner-trusting netcode lets a
+      // victim still self-report, so cap per-pilot credit rate too)
+      const validKiller = killer && killer !== s && !killer.dead &&
+        hyp2((killer.remote ? killer.netX : killer.x) - s.netX,
+             (killer.remote ? killer.netY : killer.y) - s.netY) < 1600 * 1600;
+      if (validKiller) {
         killer.kills++;
         killer.score += 10 + bounty;
         broadcast(scoreMsg(killer));
         if (!killer.bot) {
-          const kcl = [...clients].find(c => c.id === killer.id);
-          if (kcl) {
-            sendTo(kcl, scoreMsg(killer));
-            kcl.pilot.k++;
-            kcl.pilot.score += 10 + bounty;
+          const kcl = byClientId.get(killer.id);
+          const kmin = Math.floor(now / 60000);
+          if (kcl && kcl.pilot) {
+            if (kcl.credMin !== kmin) { kcl.credMin = kmin; kcl.credK = 0; }
+            if (kcl.credK < 40) {   // ~40 credited kills/min ceiling per pilot
+              kcl.credK++;
+              sendTo(kcl, scoreMsg(killer));
+              kcl.pilot.k++;
+              kcl.pilot.score += 10 + bounty;
+            }
           }
         }
       }
       broadcast(scoreMsg(s));
       sendTo(cl, scoreMsg(s));
-      broadcast({ t: 'death', id: cl.id, killer: msg.killer | 0, bounty }, cl);
-      tallyTeamKill(killer, s);
+      broadcast({ t: 'death', id: cl.id, killer: validKiller ? (msg.killer | 0) : 0, bounty }, cl);
+      tallyTeamKill(validKiller ? killer : null, s);
       duelOnDeath(cl);
       pdbSave();
       log(s.name + ' killed by ' + (killer ? killer.name : '???'));
@@ -654,15 +782,17 @@ function onMessage(cl, msg) {
       break;
     }
     case 'prize': {
+      if (!cl.joined || !cl.ship) return;
       const i = W.prizes.findIndex(p => p.id === msg.id);
-      if (i >= 0) {
+      // must be near the prize you claim — no map-wide prize wipe
+      if (i >= 0 && hyp2(W.prizes[i].x - cl.ship.netX, W.prizes[i].y - cl.ship.netY) < 320 * 320) {
         W.prizes.splice(i, 1);
         broadcast({ t: 'prize-', id: msg.id }, cl);
       }
       break;
     }
     case 'chat': {
-      if (!cl.joined) return;
+      if (!cl.joined || !msgAllowed(cl)) return;
       const text = String(msg.text || '').slice(0, 120).replace(/[\x00-\x1f]/g, '');
       if (!text) return;
       if (text.startsWith('/')) { onCommand(cl, text.slice(1)); return; }
@@ -703,7 +833,9 @@ setInterval(() => {
         broadcast({ t: 'fire', kind: 'gun', id: e.id, shots: e.shots, level: e.level, dmg: e.dmg, bounces: e.bounces });
         break;
       case 'bomb':
-        broadcast({ t: 'fire', kind: 'bomb', id: e.id, x: e.x, y: e.y, vx: e.vx, vy: e.vy, level: e.level, bounces: e.bounces });
+        // prox must travel with the bomb — clients compute their own damage,
+        // so a dropped fuse radius makes bot bombs systematically weak online
+        broadcast({ t: 'fire', kind: 'bomb', id: e.id, x: e.x, y: e.y, vx: e.vx, vy: e.vy, level: e.level, bounces: e.bounces, prox: e.prox });
         break;
       case 'burst':
         broadcast({ t: 'fire', kind: 'burst', id: e.id, x: e.x, y: e.y, vx: e.vx, vy: e.vy, radius: e.radius });
@@ -715,10 +847,14 @@ setInterval(() => {
         broadcast({ t: 'fire', kind: 'blink', id: e.id, x0: e.x0, y0: e.y0, x1: e.x1, y1: e.y1, hue: e.hue });
         break;
       case 'hit': {
-        // bots damaged by a player: accuracy credit + reaper leech credit
+        // bots damaged by a player: accuracy credit + reaper leech credit.
+        // ONLY when the victim is server-owned — player-vs-player hits are
+        // reported by the victim's own client (dmg), and crediting the
+        // ghost collision here too doubled leech and accuracy
         const att = W.byId.get(e.att);
-        if (att && att.remote) {
-          const acl = [...clients].find(c => c.id === att.id);
+        const vic = W.byId.get(e.id);
+        if (att && att.remote && vic && !vic.remote) {
+          const acl = byClientId.get(att.id);
           if (acl) {
             acl.pilot.hits++;
             if (att.t.leech) sendTo(acl, { t: 'leech', amount: Math.round(e.dmg * att.t.leech) });
@@ -747,7 +883,7 @@ setInterval(() => {
         if (v) broadcast(scoreMsg(v));
         if (k && k !== v) {
           broadcast(scoreMsg(k));
-          const kcl = [...clients].find(c => c.id === k.id);
+          const kcl = byClientId.get(k.id);
           if (kcl) sendTo(kcl, scoreMsg(k));
         }
         tallyTeamKill(k, v);
@@ -766,34 +902,41 @@ setInterval(() => {
     }
   }
   // 30Hz binary snapshot of every ship (bots simulated + players last-reported)
-  // format: u8 tag=2, f64 serverMs, u16 count, then 24B/ship:
-  //   u16 id, f32 x,y,vx,vy,angle, u8 flags(dead|thrust<<1), u8 energyFrac
+  // format: u8 tag=2, f64 serverMs, u16 count, then 26B/ship:
+  //   u32 id, f32 x,y,vx,vy,angle, u8 flags(dead|thrust<<1), u8 energyFrac
+  // (id is u32: a long-lived server outgrows 16 bits and a truncated id
+  // silently freezes that pilot's ghost for everyone)
   if (stateAccum >= 1 / 30) {
-    stateAccum = 0;
+    stateAccum -= 1 / 30;   // carry the remainder: '= 0' made the rate drift
     const n = W.ships.length;
-    const buf = Buffer.alloc(11 + n * 24);
+    const buf = Buffer.allocUnsafe(11 + n * 26);   // every byte is written below
     buf.writeUInt8(2, 0);
     buf.writeDoubleLE(Date.now(), 1);
     buf.writeUInt16LE(n, 9);
     let off = 11;
     for (const sh of W.ships) {
-      buf.writeUInt16LE(sh.id & 0xffff, off);
-      buf.writeFloatLE(sh.remote ? sh.netX : sh.x, off + 2);
-      buf.writeFloatLE(sh.remote ? sh.netY : sh.y, off + 6);
-      buf.writeFloatLE(sh.remote ? sh.netVx : sh.vx, off + 10);
-      buf.writeFloatLE(sh.remote ? sh.netVy : sh.vy, off + 14);
-      buf.writeFloatLE(sh.remote ? sh.netA : sh.angle, off + 18);
-      buf.writeUInt8((sh.dead ? 1 : 0) | ((sh.remote ? sh.netTh : (sh.ctl.thrust > 0 || sh.rocketT > 0 ? 1 : 0)) << 1), off + 22);
-      buf.writeUInt8(Math.round(SIM.clamp(sh.remote ? sh.netFrac : sh.energy / sh.maxEnergy, 0, 1) * 255), off + 23);
-      off += 24;
+      buf.writeUInt32LE(sh.id >>> 0, off);
+      buf.writeFloatLE(sh.remote ? sh.netX : sh.x, off + 4);
+      buf.writeFloatLE(sh.remote ? sh.netY : sh.y, off + 8);
+      buf.writeFloatLE(sh.remote ? sh.netVx : sh.vx, off + 12);
+      buf.writeFloatLE(sh.remote ? sh.netVy : sh.vy, off + 16);
+      buf.writeFloatLE(sh.remote ? sh.netA : sh.angle, off + 20);
+      buf.writeUInt8((sh.dead ? 1 : 0) | ((sh.remote ? sh.netTh : (sh.ctl.thrust > 0 || sh.rocketT > 0 ? 1 : 0)) << 1), off + 24);
+      buf.writeUInt8(Math.round(SIM.clamp(sh.remote ? sh.netFrac : sh.energy / sh.maxEnergy, 0, 1) * 255), off + 25);
+      off += 26;
     }
     broadcastBin(buf);
   }
-  // kick silent clients
-  const cutoff = Date.now() - 15000;
-  for (const cl of [...clients]) {
-    if (cl.joined && cl.lastSeen < cutoff) { log('kicking silent client ' + cl.name); dropClient(cl); }
+  // kick silent clients (only materialize the set when someone is stale)
+  const now2 = Date.now(), cutoff = now2 - 15000, connCut = now2 - 12000;
+  let stale = null;
+  for (const cl of clients) {
+    // joined pilots: silent for 15s. Un-joined sockets: never sent a join
+    // within 12s of connecting — a handshake-and-hold memory-DoS vector
+    if ((cl.joined && cl.lastSeen < cutoff) || (!cl.joined && cl.connT < connCut))
+      (stale || (stale = [])).push(cl);
   }
+  if (stale) for (const cl of stale) { if (cl.joined) log('kicking silent client ' + cl.name); dropClient(cl); }
 }, 15);
 
 // bot backfill: bots make room as humans arrive, return when they leave

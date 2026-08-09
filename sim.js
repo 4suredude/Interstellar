@@ -46,7 +46,9 @@
   const rand = (a, b) => a === undefined ? Math.random() : a + Math.random() * (b - a);
   const irand = n => (Math.random() * n) | 0;
   const pick = arr => arr[irand(arr.length)];
-  const hyp = Math.hypot;
+  // 2-arg hypot without Math.hypot's overflow-safe scaling — ~5x faster in
+  // the collision loops, and our operands never exceed the world size
+  const hyp = (a, b) => Math.sqrt(a * a + b * b);
   function angleNorm(a) { a = (a + Math.PI) % TAU; if (a < 0) a += TAU; return a - Math.PI; }
   const dist2 = (a, b) => hyp(a.x - b.x, a.y - b.y);
 
@@ -641,8 +643,10 @@
   });
   const qKey = (qx, qy) => qy * GRID + qx;
   function terrOwner(W, x, y) {
-    const q = quadOf(x, y);
-    const t = W.terr && W.terr[qKey(q.qx, q.qy)];
+    // inlined quadrant math — this runs per teamed ship per step
+    if (!W.terr) return 0;
+    const qx = clamp((x / QUADPX) | 0, 0, GRID - 1), qy = clamp((y / QUADPX) | 0, 0, GRID - 1);
+    const t = W.terr[qy * GRID + qx];
     return t ? t.own : 0;
   }
   function terrInit(W) {
@@ -660,10 +664,20 @@
     const pres = {};
     for (const s of W.ships) {
       if (s.dead || !s.team || s.team > 4) continue;
-      const q = quadOf(s.remote ? s.x : s.x, s.remote ? s.y : s.y);
+      const q = quadOf(s.x, s.y);
       const k = qKey(q.qx, q.qy);
       const row = pres[k] || (pres[k] = {});
       row[s.team] = (row[s.team] || 0) + 1;
+    }
+    // capture progress erodes in ABSENCE too — 44s of pressure must not sit
+    // frozen forever in an empty quadrant waiting for one ship to finish it
+    for (const k in W.terr) {
+      if (pres[k]) continue;
+      const T = W.terr[k];
+      for (const tm in T.p) {
+        T.p[tm] = Math.max(0, T.p[tm] - tick * 0.5);
+        if (!T.p[tm]) delete T.p[tm];
+      }
     }
     for (const k in pres) {
       const kn = +k, qx = kn % GRID, qy = (kn / GRID) | 0;
@@ -915,8 +929,12 @@
     ev(W, { e: 'gun', id: s.id, x: s.x, y: s.y, level: s.gunLevel, dmg, bounces, shots });
     return true;
   }
+  const fin = v => Number.isFinite(v);
   function injectGun(W, owner, msg) {
-    spawnBullets(W, owner, msg.shots, msg.level, msg.dmg, msg.bounces);
+    if (!Array.isArray(msg.shots)) return;
+    for (const s of msg.shots) if (!s || !fin(s.x) || !fin(s.y) || !fin(s.vx) || !fin(s.vy)) return;
+    const dmg = clamp(+msg.dmg || 0, 0, 900);   // negative dmg would HEAL targets
+    spawnBullets(W, owner, msg.shots, msg.level, dmg, clamp(+msg.bounces || 0, 0, 3));
   }
 
   function fireBomb(W, s) {
@@ -939,10 +957,11 @@
     return true;
   }
   function injectBomb(W, owner, msg) {
+    if (!fin(msg.x) || !fin(msg.y) || !fin(msg.vx) || !fin(msg.vy)) return;
     W.bombs.push({
       x: msg.x, y: msg.y, vx: msg.vx, vy: msg.vy,
-      life: 3.4, level: msg.level, bounces: msg.bounces,
-      prox: Math.min(100, msg.prox || 15), owner,
+      life: 3.4, level: clamp(+msg.level || 1, 1, 3), bounces: clamp(+msg.bounces || 0, 0, 5),
+      prox: clamp(+msg.prox || 15, 0, 100), owner,
     });
   }
 
@@ -974,7 +993,7 @@
     ev(W, { e: 'repel', id: s.id, x: s.x, y: s.y });
     return true;
   }
-  function injectRepel(W, owner, msg) { repelAt(W, owner, msg.x, msg.y); }
+  function injectRepel(W, owner, msg) { if (fin(msg.x) && fin(msg.y)) repelAt(W, owner, msg.x, msg.y); }
 
   function burstShots(x, y, vx, vy, radius) {
     const shots = [];
@@ -997,7 +1016,8 @@
     return true;
   }
   function injectBurst(W, owner, msg) {
-    spawnBullets(W, owner, burstShots(msg.x, msg.y, msg.vx, msg.vy, msg.radius), 2, 240, 3);
+    if (!fin(msg.x) || !fin(msg.y)) return;
+    spawnBullets(W, owner, burstShots(msg.x, msg.y, +msg.vx || 0, +msg.vy || 0, clamp(+msg.radius || 90, 0, 200)), 2, 240, 3);
   }
 
   function fireRocket(W, s) {
@@ -1331,8 +1351,8 @@
       const ms = W.motherships && W.motherships[s.team];
       if (ms && hyp(ms.x - s.x, ms.y - s.y) < 700) rech *= 2.4;
       else if (terrOwner(W, s.x, s.y) === s.team) rech *= 1.3;  // held ground favors its holders
-      for (const o of W.ships) {
-        if (o === s || o.dead || o.team !== s.team || o.type !== 'warden') continue;
+      for (const o of (W._wardens || [])) {
+        if (o === s || o.team !== s.team) continue;
         if (hyp(o.x - s.x, o.y - s.y) < 170) { rech *= 1.35; break; }
       }
     }
@@ -1506,7 +1526,7 @@
           const R2 = (bt / 6) * 3200;        // expanding front
           for (const s of W.ships) {
             if (s.dead || s.remote) continue;
-            if (s.novaT > 0) { s.novaT -= dt; continue; }
+            if (s.novaT > 0) continue;       // grace timer decays in the hazard loop
             const d = hyp(s.x - EVT.x, s.y - EVT.y);
             if (Math.abs(d - R2) < 170) {
               const inv = 1 / Math.max(1, d);
@@ -1560,6 +1580,8 @@
         if (s.dead || s.remote) continue;
         if (s.rockT > 0) s.rockT -= dt;
         if (s.wormT > 0) s.wormT -= dt;
+        if (s.novaT > 0) s.novaT -= dt;   // decays ALWAYS, not only mid-nova —
+                                          // stale grace must not shield the next collapse
         if (s.rockT <= 0 && hyp(s.x - W.danger.x, s.y - W.danger.y) < W.danger.r + 250) {
           for (const rk of W.rocks) {
             const q = rockAt(W, rk, W.time);
@@ -1590,6 +1612,10 @@
         }
       }
     }
+    // per-step warden roster: keeps the aura check O(ships), not O(ships^2)
+    const wl = W._wardens || (W._wardens = []);
+    wl.length = 0;
+    for (const o of W.ships) if (!o.dead && o.team && o.type === 'warden') wl.push(o);
     for (const s of W.ships) updateShip(W, s, dt);
     updateBullets(W, dt);
     updateBombs(W, dt);
