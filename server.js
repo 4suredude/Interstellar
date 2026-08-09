@@ -207,7 +207,7 @@ let MAPSTYLE = (process.env.MAP || 'nexus').toLowerCase();
 const TEAMMODE = MODE === 'teams' || MODE === 'core';
 // ships keep their type-identity hue; team reads from halo/ring/nameplates
 let SIDES = 0; // flips each round so neither team owns a flank
-const worldOpts = { spawnPrizes: true, mapStyle: MAPSTYLE };
+const worldOpts = { spawnPrizes: true, mapStyle: MAPSTYLE, authority: true };
 if (TEAMMODE) {
   const C = SIM.WORLD / 2;
   worldOpts.respawnDelay = 2.2;
@@ -546,6 +546,15 @@ function onMessage(cl, msg) {
       pdbSave();
       break;
     }
+    case 'relic': {
+      // a pilot salvaged a relic slot: mark it and tell everyone else
+      const i = msg.slot | 0;
+      if (W.relicSlots && W.relicSlots[i]) {
+        W.relicSlots[i].taken = W.time;
+        broadcast({ t: 'relic-', i }, cl);
+      }
+      break;
+    }
     case 's': {
       const s = cl.ship;
       if (!s) return;
@@ -722,6 +731,14 @@ setInterval(() => {
         break;
       case 'worm':   // a bot fell through a wormhole
         broadcast({ t: 'fire', kind: 'worm', id: e.id, x0: e.x0, y0: e.y0, x1: e.x1, y1: e.y1, hue: e.hue });
+        break;
+      case 'capture':
+        broadcast({ t: 'terr', qx: e.qx, qy: e.qy, team: e.team });
+        sysAll(SIM.FACTIONS[e.team].name + ' captured quadrant ' +
+          String.fromCharCode(65 + e.qx) + (e.qy + 1) + '.');
+        break;
+      case 'raider':   // marauders spawned by the event timeline join as bots
+        broadcast({ t: 'join', p: { id: e.id, name: e.name, ship: e.ship, hue: e.hue, team: 5, bot: 1, kills: 0, deaths: 0, score: 0 } });
         break;
       case 'kill': {
         // a bot died in the server sim

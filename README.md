@@ -43,13 +43,39 @@ Pick your squad (or fly freelance) when you enter the Zone; bot squads
 fight the four-way war with or without you, and squad members respawn
 under their mothership.
 
+**Territorial war.** Squads **capture quadrants**: sole majority presence
+in a frontier quadrant for 45 accumulated seconds flips it — the chart
+updates ("D2 · CRIMSON HELD"), the capture is announced sector-wide,
+participants earn credits, and held ground recharges its holders' hulls
+30% faster. Home quadrants never fall, the core is forever contested, and
+no law reaches the Dead Zone.
+
+**Your wing.** Fly for a squad and a named wing (TALON, HALO, CINDER,
+SHADE) forms on you — two squadmates who hold formation off your stern,
+hunt what you hunt, and fall on whoever falls on you.
+
 **Upgrades, not greens.** In the Zone, greens don't grant random powerups
 — you **salvage them for credits** (kills pay too: 30 + bounty). Press
 `U` for the **upgrade bay**: Cannons, Bombs, Engines, Reactor, Recharger,
 MultiFire, Prox Fuse, and Repel/Burst/Rocket racks — ten tracks with
-escalating prices. **Upgrades are permanent**: they survive death and are
-saved between sessions. Match modes (Duel, Squad, Core) stay classic —
-pure skill, greens and all.
+escalating prices. **Top tiers demand ◆ relics**: rare tech cached only
+in dangerous places — the Maelstrom's heart, the Dead Zone, *rival
+fortress quadrants*, and the deep belts. **Upgrades are permanent**: they
+survive death and are saved between sessions. Match modes (Duel, Squad,
+Core) stay classic — pure skill, greens and all.
+
+**The Dead Zone.** One edge quadrant belongs to nobody and never will:
+marauder country, relic-rich, storm-scored on the soundtrack. High risk,
+highest reward.
+
+**Generated events force action.** On a deterministic timeline (identical
+for every client, no netcode), the sector throws: **asteroid showers**
+that rake a quadrant with streaking rock; **marauder raids** — pirate
+packs hostile to everyone, worth fat bounties, whose survivors *prowl the
+sector until somebody collects*; and **stellar collapse** — an 18-second
+evacuation warning, then a supernova shockwave that expands three
+kilometres and hits like a freight train. Every event is announced with
+its chart reference and pulses on the scanner.
 
 The whole map spans a scale where travel matters — a single quadrant is
 already a former full map: The population concentrates in the mid-sector around the arena, so

@@ -597,7 +597,149 @@
         dx: WORLD / 2 - (ddx / L) * 2800, dy: WORLD / 2 - (ddy / L) * 2800,
       });
     }
+
+    // THE DEAD ZONE: one edge quadrant belongs to nobody and never will —
+    // marauder country, relic-rich, no law
+    const dzc = [[GRID >> 1, 0], [0, GRID >> 1], [GRID - 1, GRID >> 1], [GRID >> 1, GRID - 1]];
+    const dqx = (cx / QUADPX) | 0, dqy = (cy / QUADPX) | 0;
+    let dz = dzc[(rng() * 4) | 0];
+    if (dz[0] === dqx && dz[1] === dqy) dz = dzc.find(c => c[0] !== dqx || c[1] !== dqy);
+    W.deadZone = { qx: dz[0], qy: dz[1] };
+    terrInit(W);
+
+    // RELIC SLOTS: rare tech needed for top-tier upgrades, cached only in
+    // dangerous places — the storm's heart, the dead zone, rival fortress
+    // quadrants, and the belts. Deterministic positions; slots respawn 240s
+    // after being salvaged.
+    W.relicSlots = [];
+    for (let i = 0; i < 14; i++) {
+      const r = rng();
+      let x, y;
+      if (r < 0.3) {                       // the maelstrom's interior
+        const a = rng() * TAU, rr = Math.sqrt(rng()) * R * 0.7;
+        x = cx + Math.cos(a) * rr; y = cy + Math.sin(a) * rr;
+      } else if (r < 0.55) {               // the dead zone
+        x = (W.deadZone.qx + 0.15 + rng() * 0.7) * QUADPX;
+        y = (W.deadZone.qy + 0.15 + rng() * 0.7) * QUADPX;
+      } else if (r < 0.8) {                // a rival fortress quadrant
+        const F = FACTIONS[1 + ((rng() * 4) | 0)];
+        x = (F.qx + 0.12 + rng() * 0.76) * QUADPX;
+        y = (F.qy + 0.12 + rng() * 0.76) * QUADPX;
+      } else {                             // out along a belt band
+        const a = rng() * TAU, rr = WORLD * (0.16 + rng() * 0.3);
+        x = WORLD / 2 + Math.cos(a) * rr; y = WORLD / 2 + Math.sin(a) * rr;
+      }
+      x = clamp(x, 800, WORLD - 800); y = clamp(y, 800, WORLD - 800);
+      const p = findClearNear(W, x, y) || { x, y };
+      W.relicSlots.push({ x: p.x, y: p.y, taken: -999 });
+    }
   }
+  // ------------------------------------------------------------ territory
+  const quadOf = (x, y) => ({
+    qx: clamp((x / QUADPX) | 0, 0, GRID - 1),
+    qy: clamp((y / QUADPX) | 0, 0, GRID - 1),
+  });
+  const qKey = (qx, qy) => qy * GRID + qx;
+  function terrOwner(W, x, y) {
+    const q = quadOf(x, y);
+    const t = W.terr && W.terr[qKey(q.qx, q.qy)];
+    return t ? t.own : 0;
+  }
+  function terrInit(W) {
+    W.terr = {};
+    for (const team of [1, 2, 3, 4]) {
+      const F = FACTIONS[team];
+      W.terr[qKey(F.qx, F.qy)] = { own: team, home: team, p: {} };
+    }
+  }
+  // presence converts quadrants: sole majority for 45 accumulated seconds
+  // flips a frontier quadrant. Homes never fall, the core is forever
+  // contested, and no law reaches the dead zone.
+  function terrTick(W, tick) {
+    const MID = GRID >> 1;
+    const pres = {};
+    for (const s of W.ships) {
+      if (s.dead || !s.team || s.team > 4) continue;
+      const q = quadOf(s.remote ? s.x : s.x, s.remote ? s.y : s.y);
+      const k = qKey(q.qx, q.qy);
+      const row = pres[k] || (pres[k] = {});
+      row[s.team] = (row[s.team] || 0) + 1;
+    }
+    for (const k in pres) {
+      const kn = +k, qx = kn % GRID, qy = (kn / GRID) | 0;
+      if (qx === MID && qy === MID) continue;
+      if (W.deadZone && W.deadZone.qx === qx && W.deadZone.qy === qy) continue;
+      const T = W.terr[kn] || (W.terr[kn] = { own: 0, p: {} });
+      if (T.home) continue;
+      let top = 0, topN = 0, second = 0;
+      for (const tm in pres[k]) {
+        const n = pres[k][tm];
+        if (n > topN) { second = topN; topN = n; top = +tm; }
+        else if (n > second) second = n;
+      }
+      if (top && topN > second) {
+        if (top === T.own) { T.p = {}; continue; }
+        T.p[top] = (T.p[top] || 0) + tick;
+        if (T.p[top] >= 45) {
+          const prev = T.own;
+          T.own = top; T.p = {};
+          ev(W, { e: 'capture', qx, qy, team: top, prev });
+        }
+      } else {
+        for (const tm in T.p) T.p[tm] = Math.max(0, T.p[tm] - tick * 0.5);
+      }
+    }
+  }
+
+  // ------------------------------------------------------------ events
+  // Generated events on a DETERMINISTIC timeline (a pure function of seed
+  // and world time, like the storm rocks) — every client computes the same
+  // asteroid shower, marauder raid, or stellar collapse at the same moment.
+  const EV_PERIOD = 115, EV_LEAD = 18;
+  function evRnd(W, idx, n) {
+    // murmur3 finalizer: consecutive indices must decorrelate fully
+    let h = (((W.opts.seed | 0) >>> 0) + Math.imul(idx + 1, 0x9E3779B1) + Math.imul(n + 1, 0x85EBCA77)) >>> 0;
+    h ^= h >>> 16; h = Math.imul(h, 0x85EBCA6B) >>> 0;
+    h ^= h >>> 13; h = Math.imul(h, 0xC2B2AE35) >>> 0;
+    h ^= h >>> 16;
+    return (h >>> 0) / 4294967296;
+  }
+  function evActive(W) {
+    if (!W.danger) return null;
+    const idx = Math.floor(W.time / EV_PERIOD);
+    const r0 = evRnd(W, idx, 0);
+    const start = idx * EV_PERIOD + 12 + r0 * 18;
+    const type = r0 < 0.4 ? 'shower' : r0 < 0.75 ? 'marauders' : 'nova';
+    const dur = type === 'shower' ? 45 : type === 'marauders' ? 55 : EV_LEAD + 6;
+    if (W.time < start || W.time > start + dur) return null;
+    let qx, qy;
+    if (evRnd(W, idx, 1) < 0.35 && W.deadZone) { qx = W.deadZone.qx; qy = W.deadZone.qy; }
+    else {
+      qx = (evRnd(W, idx, 2) * GRID) | 0;
+      qy = (evRnd(W, idx, 3) * GRID) | 0;
+      for (const t in FACTIONS) {
+        const F = FACTIONS[t];
+        if (F.qx === qx && F.qy === qy) { qx = GRID >> 1; qy = (qy + 1) % GRID; break; }
+      }
+    }
+    const x = (qx + 0.3 + evRnd(W, idx, 4) * 0.4) * QUADPX;
+    const y = (qy + 0.3 + evRnd(W, idx, 5) * 0.4) * QUADPX;
+    return { idx, type, start, end: start + dur, t: W.time - start, qx, qy, x, y };
+  }
+  // shower rocks streak across the event zone on straight closed-form paths
+  function showerRockAt(W, E, i) {
+    const r = a => evRnd(W, E.idx, 10 + i * 5 + a);
+    const ang = r(0) * TAU, sp = 460 + r(1) * 380;
+    const off = (r(2) - 0.5) * QUADPX * 0.85;
+    const px = Math.cos(ang), py = Math.sin(ang);
+    const span = QUADPX * 1.25;
+    const prog = ((E.t * sp + r(3) * span) % span) - span / 2;
+    return {
+      x: E.x + px * prog - py * off, y: E.y + py * prog + px * off,
+      vx: px * sp, vy: py * sp, rad: 12 + r(4) * 14, shape: (r(2) * 1e9) | 0, spin: (r(3) - 0.5) * 3,
+    };
+  }
+
   function rockAt(W, rk, t) {
     const a1 = rk.p1 + rk.w1 * t, a2 = rk.p2 + rk.w2 * t;
     return {
@@ -633,7 +775,7 @@
       gunCd: 0, bombCd: 0, repelCd: 0, burstCd: 0, rocketT: 0, regenT: 0, blinkCd: 0, warpCd: 0,
       dormant: false,
       dead: false, respawn: 0, safe: 0, flash: 0,
-      rockT: 0, wormT: 0,        // maelstrom grace timers
+      rockT: 0, wormT: 0, novaT: 0,   // hazard grace timers
       kills: 0, deaths: 0, score: 0,
       ctl: { turn: 0, thrust: 0, strafe: 0, gun: false, bomb: false },
       ai: { target: null, mode: 'roam', think: rand(0, 0.2), wp: null, err: 0, dodge: 0, dodgeAngle: 0, avoid: 0, wantRepel: false, skill: 0.5 },
@@ -1033,6 +1175,20 @@
           Math.abs(angleNorm(desired - s.angle)) < 0.4) doBlink(W, s);
       if (s.rockets > 0 && s.rocketT <= 0) fireRocket(W, s);
     } else {
+      // wingmates: no target means form on the leader, not wander off
+      const ldr = a.escort ? W.byId.get(a.escort) : null;
+      if (ldr && !ldr.dead) {
+        const dl = hyp(ldr.x - s.x, ldr.y - s.y);
+        if (dl > 340) {
+          a.wp = { x: ldr.x + rand(-170, 170), y: ldr.y + rand(-170, 170) };
+        } else if (dl < 120) {
+          a.wp = null;
+          desired = s.angle; th = 0;
+          c.turn = clamp(angleNorm(ldr.angle - s.angle) * 3, -1, 1);
+          c.thrust = 0;
+          return;
+        }
+      }
       if (!a.wp || hyp(a.wp.x - s.x, a.wp.y - s.y) < 90) {
         let pz = null, pd = 800;
         for (const p of W.prizes) {
@@ -1174,6 +1330,7 @@
     if (s.team) {
       const ms = W.motherships && W.motherships[s.team];
       if (ms && hyp(ms.x - s.x, ms.y - s.y) < 700) rech *= 2.4;
+      else if (terrOwner(W, s.x, s.y) === s.team) rech *= 1.3;  // held ground favors its holders
       for (const o of W.ships) {
         if (o === s || o.dead || o.team !== s.team || o.type !== 'warden') continue;
         if (hyp(o.x - s.x, o.y - s.y) < 170) { rech *= 1.35; break; }
@@ -1313,6 +1470,89 @@
         }
       }
     }
+    // territorial war: presence flips quadrants (authority world only —
+    // online clients apply the server's capture broadcasts instead)
+    if (W.terr && W.opts.authority) {
+      W.terrT = (W.terrT || 0) + dt;
+      if (W.terrT >= 1) { terrTick(W, W.terrT); W.terrT = 0; }
+    }
+
+    // generated events: showers, raids, stellar collapse — all computed
+    // from the shared deterministic timeline
+    const EVT = W.evt = evActive(W);
+    if (EVT) {
+      if (EVT.type === 'shower') {
+        for (const s of W.ships) {
+          if (s.dead || s.remote || s.rockT > 0) continue;
+          if (Math.abs(s.x - EVT.x) > QUADPX * 0.8 || Math.abs(s.y - EVT.y) > QUADPX * 0.8) continue;
+          for (let i = 0; i < 12; i++) {
+            const q = showerRockAt(W, EVT, i);
+            const d = hyp(s.x - q.x, s.y - q.y);
+            if (d < q.rad + s.t.radius) {
+              const rel = hyp(s.vx - q.vx, s.vy - q.vy);
+              const inv = 1 / Math.max(1, d);
+              s.vx += (s.x - q.x) * inv * (160 + rel * 0.35);
+              s.vy += (s.y - q.y) * inv * (160 + rel * 0.35);
+              s.rockT = 0.7;
+              ev(W, { e: 'rockhit', id: s.id, x: q.x, y: q.y, rel });
+              damageShip(W, s, 120 + rel * 0.4, null);
+              break;
+            }
+          }
+        }
+      } else if (EVT.type === 'nova') {
+        const bt = EVT.t - EV_LEAD;          // time since detonation
+        if (bt > 0) {
+          const R2 = (bt / 6) * 3200;        // expanding front
+          for (const s of W.ships) {
+            if (s.dead || s.remote) continue;
+            if (s.novaT > 0) { s.novaT -= dt; continue; }
+            const d = hyp(s.x - EVT.x, s.y - EVT.y);
+            if (Math.abs(d - R2) < 170) {
+              const inv = 1 / Math.max(1, d);
+              s.vx += (s.x - EVT.x) * inv * 520;
+              s.vy += (s.y - EVT.y) * inv * 520;
+              s.novaT = 1.2;
+              ev(W, { e: 'novahit', id: s.id, x: s.x, y: s.y });
+              damageShip(W, s, 480 * (1 - bt / 12), null);
+            }
+          }
+        }
+      } else if (EVT.type === 'marauders') {
+        // the authority spawns the raiders; everyone else sees them as bots.
+        // Survivors are NOT cleaned up — they prowl until somebody collects.
+        if (W.opts.authority && W.evtSpawned !== EVT.idx) {
+          W.evtSpawned = EVT.idx;
+          const prowling = W.ships.filter(s => s.marauder && !s.dead).length;
+          for (let i = 0; i < 3 && prowling + i < 7; i++) {
+            const m = makeShip(W, pick(['dagger', 'reaper', 'comet']), 'bot', 'Marauder', null, 5);
+            m.marauder = true;
+            m.ai.skill = 0.8;
+            m.bounty = 60;                   // their heads are worth credits
+            spawnShip(W, m);
+            const p = findClearNear(W, EVT.x + rand(-500, 500), EVT.y + rand(-500, 500)) || { x: EVT.x, y: EVT.y };
+            m.x = p.x; m.y = p.y;
+            ev(W, { e: 'raider', id: m.id, name: m.name, ship: m.type, hue: m.hue, x: m.x, y: m.y });
+          }
+        }
+      }
+    }
+
+    // relic salvage: local human pilots only — bots have no use for tech
+    if (W.relicSlots) {
+      for (const s of W.ships) {
+        if (s.dead || s.remote || s.bot || !s.noGreens) continue;
+        for (let i = 0; i < W.relicSlots.length; i++) {
+          const sl = W.relicSlots[i];
+          if (W.time - sl.taken < 240 && sl.taken > -1) continue;
+          if (hyp(s.x - sl.x, s.y - sl.y) < 30 + s.t.radius) {
+            sl.taken = W.time;
+            ev(W, { e: 'relic', id: s.id, slot: i, x: sl.x, y: sl.y });
+          }
+        }
+      }
+    }
+
     // the maelstrom: storm rock tears local hulls; wormholes swallow anyone
     // who strays too close (remote ghosts are handled by their own owner)
     if (W.danger) {
@@ -1365,6 +1605,7 @@
     SHIP_ORDER, SHIP_TYPES, PRIZE_TYPES, BOT_NAMES, HUES,
     clamp, rand, irand, pick, angleNorm, mulberry32,
     tileSolid, solidAtPx, rectSolid, losClear, randClearPoint, findSpawn, rockAt,
+    quadOf, terrOwner, evActive, showerRockAt, EV_LEAD,
     createWorld, makeShip, removeShip, spawnShip, addBots,
     applyLoadoutDefaults, applyPrize, addPrize, removePrizeById,
     fireGun, fireBomb, doRepel, doBurst, fireRocket, doBlink, warpToBeacon,

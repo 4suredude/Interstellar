@@ -26,7 +26,7 @@
     cam: { x: WORLD / 2, y: WORLD / 2 }, shake: 0, hitFlash: 0,
     sel: 0, best: 0, deathBy: '',
     // MMO layer: squad allegiance, credits, permanent upgrades, quadrant
-    zoneTeam: 0, credits: 0, upg: {}, mmo: false, upgOpen: false, quad: '',
+    zoneTeam: 0, credits: 0, relics: 0, upg: {}, mmo: false, upgOpen: false, quad: '', evtSeen: -1,
     mode: 'ffa', pendingMode: 'squad', match: null,
     banner: null, lastKillT: -99, combo: 0, duelW: 0, duelL: 0,
     demoT: 0, demoShip: null,
@@ -416,6 +416,7 @@
     if (W.danger && Math.hypot(p.x - W.danger.x, p.y - W.danger.y) < W.danger.r + 900) return 'storm';
     const GR = SIM.GRID, MID = GR >> 1;
     const qx = clamp((p.x / SIM.QUADPX) | 0, 0, GR - 1), qy = clamp((p.y / SIM.QUADPX) | 0, 0, GR - 1);
+    if (W.deadZone && W.deadZone.qx === qx && W.deadZone.qy === qy) return 'storm';  // no law, no comfort
     if (qx === MID && qy === MID) return 'core';
     for (const t in SIM.FACTIONS) {
       const F = SIM.FACTIONS[t];
@@ -987,6 +988,24 @@
   function flash(x, y, size, hue) {
     G.parts.push({ x, y, vx: 0, vy: 0, life: 0.09, max: 0.09, hue, kind: 'flash', size });
   }
+  function applyCapture(qx, qy, team) {
+    if (G.W && G.W.terr) {
+      const k = qy * SIM.GRID + qx;
+      (G.W.terr[k] = G.W.terr[k] || { own: 0, p: {} }).own = team;
+    }
+    const F = SIM.FACTIONS[team];
+    if (!F) return;
+    const ref = String.fromCharCode(65 + qx) + (qy + 1);
+    say(F.name + ' captured quadrant ' + ref + '.', 'hsl(' + F.hue + ',85%,70%)');
+    if (G.player && G.player.team === team) {
+      const q = SIM.quadOf(G.player.x, G.player.y);
+      if (q.qx === qx && q.qy === qy && G.mmo) {
+        G.credits += 150; saveMMO();
+        banner('QUADRANT CAPTURED', '+150 credits — held ground recharges your squad', 3);
+      } else banner('QUADRANT ' + ref + ' TAKEN', 'your squad expands', 2.2);
+    }
+  }
+
   // seeded jaggy asteroid outline, baked once per rock
   function rockPath(rk) {
     if (rk._pts) return rk._pts;
@@ -1114,6 +1133,29 @@
             banner('THE MAELSTROM', 'a wormhole swallowed you — the rim gate leads home', 3);
             MUS.pulse = 1;
           }
+          break;
+        case 'capture':
+          applyCapture(e.qx, e.qy, e.team);
+          break;
+        case 'relic':
+          spark(e.x, e.y, 285, 14, 200);
+          if (mine) {
+            G.relics++; saveMMO();
+            say('◆ Relic salvaged — rare tech for the upgrade bay (' + G.relics + ')', '#d9f');
+            sndPrize(); tone('sine', 1320, 1980, 0.25, 0.12, 0.1);
+            if (G.online) netSend({ t: 'relic', slot: e.slot });
+          }
+          break;
+        case 'novahit':
+          if (mine) {
+            G.shake = Math.max(G.shake, 16);
+            G.hitFlash = Math.max(G.hitFlash, 0.5);
+            sndBomb(e.x, e.y);
+            MUS.pulse = 1;
+          }
+          break;
+        case 'raider':
+          say('A marauder pack warps in — kill them for their bounty.', '#f96');
           break;
         case 'boom':
           boomFX(e.x, e.y, 70 + 28 * e.level, 25, e.level >= 2);
@@ -1416,6 +1458,12 @@
         // re-align the world clock so everyone's storm rocks fly in step
         if (W && Math.abs(W.time - msg.wt) > 0.75) W.time = msg.wt;
         break;
+      case 'terr':
+        applyCapture(msg.qx, msg.qy, msg.team);
+        break;
+      case 'relic-':
+        if (W && W.relicSlots && W.relicSlots[msg.i]) W.relicSlots[msg.i].taken = W.time;
+        break;
       case 'prize+':
         if (W) SIM.addPrize(W, msg.x, msg.y, msg.id);
         break;
@@ -1500,7 +1548,7 @@
 
   // ---------------------------------------------------------------- world setup
   function newSoloWorld() {
-    G.W = SIM.createWorld({ seed: (Math.random() * 1e9) | 0, spawnPrizes: true, zoneWorld: true });
+    G.W = SIM.createWorld({ seed: (Math.random() * 1e9) | 0, spawnPrizes: true, zoneWorld: true, authority: true });
     // squad members respawn in their fortress keep, under the mothership;
     // freelancers respawn in the contested mid-sector
     G.W.opts.spawnPoint = sh => {
@@ -1702,6 +1750,25 @@
         if (G.quad) banner('ENTERING ' + qn, '', 2);
         G.quad = qn;
       }
+    }
+
+    // generated events: one announcement per event, everywhere in the sector
+    const EVW = W.evt;
+    if (EVW && G.evtSeen !== EVW.idx && G.state === 'play') {
+      G.evtSeen = EVW.idx;
+      const ref = String.fromCharCode(65 + EVW.qx) + (EVW.qy + 1);
+      if (EVW.type === 'shower') {
+        banner('ASTEROID SHOWER', 'quadrant ' + ref + ' is being raked', 2.6);
+        say('Asteroid shower sweeping ' + ref + '.', '#fb6');
+      } else if (EVW.type === 'marauders') {
+        banner('MARAUDER RAID', 'pirates in ' + ref + ' — bounties on their heads', 2.8);
+        say('Marauders raiding ' + ref + '. Their heads are worth credits.', '#f96');
+      } else {
+        banner('STELLAR COLLAPSE IMMINENT', 'quadrant ' + ref + ' — evacuate the blast zone', 3.2);
+        say('Stellar collapse building in ' + ref + '!', '#f66');
+      }
+      MUS.pulse = Math.min(1, MUS.pulse + 0.25);
+      sndContact();
     }
 
     // thrust exhaust for every live thrusting ship
@@ -2709,6 +2776,80 @@
       }
     }
 
+    // relics: rare tech glinting in dangerous places
+    if (W.relicSlots) {
+      for (const sl of W.relicSlots) {
+        if (sl.taken > -1 && W.time - sl.taken < 240) continue;
+        if (sl.x < camL || sl.x > camR || sl.y < camT || sl.y > camB) continue;
+        ctx.save();
+        ctx.translate(sl.x, sl.y);
+        ctx.globalCompositeOperation = 'lighter';
+        drawGlow(0, 0, 44 + 10 * Math.sin(G.time * 3), 285, 0.5);
+        ctx.rotate(G.time * 1.2);
+        ctx.strokeStyle = 'rgba(220,150,255,0.95)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(-8, -8, 16, 16);
+        ctx.rotate(Math.PI / 4);
+        ctx.strokeStyle = 'rgba(160,220,255,0.7)';
+        ctx.strokeRect(-6, -6, 12, 12);
+        ctx.restore();
+      }
+    }
+
+    // generated events, drawn where they happen
+    if (W.evt) {
+      const E = W.evt;
+      if (E.type === 'shower') {
+        for (let i = 0; i < 12; i++) {
+          const q = SIM.showerRockAt(W, E, i);
+          if (q.x < camL || q.x > camR || q.y < camT || q.y > camB) continue;
+          // motion streak + tumbling rock
+          ctx.strokeStyle = 'rgba(255,170,90,0.35)';
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(q.x, q.y);
+          ctx.lineTo(q.x - q.vx * 0.14, q.y - q.vy * 0.14);
+          ctx.stroke();
+          ctx.save();
+          ctx.translate(q.x, q.y);
+          ctx.rotate(G.time * q.spin);
+          const pts = rockPath(q);
+          ctx.beginPath();
+          for (let j = 0; j < pts.length; j++) j ? ctx.lineTo(pts[j][0], pts[j][1]) : ctx.moveTo(pts[0][0], pts[0][1]);
+          ctx.closePath();
+          ctx.fillStyle = '#2a2635';
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(255,160,90,0.5)';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+          ctx.restore();
+        }
+      } else if (E.type === 'nova') {
+        const bt = E.t - SIM.EV_LEAD;
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        if (bt <= 0) {
+          // the doomed star swells and strobes
+          const k = 1 + bt / SIM.EV_LEAD;   // 0..1 across the warning
+          const throb = 0.75 + 0.25 * Math.sin(G.time * (4 + k * 14));
+          drawGlow(E.x, E.y, (80 + 260 * k) * throb, 45, 0.5 + 0.4 * k);
+          ctx.fillStyle = 'rgba(255,250,235,' + (0.5 + 0.5 * k).toFixed(3) + ')';
+          ctx.beginPath(); ctx.arc(E.x, E.y, 16 + 26 * k * throb, 0, TAU); ctx.fill();
+        } else {
+          // detonation: residual flare + the expanding kill-front
+          const R2 = (bt / 6) * 3200;
+          drawGlow(E.x, E.y, 320 * Math.max(0, 1 - bt / 3), 45, 0.8 * Math.max(0, 1 - bt / 3));
+          ctx.strokeStyle = 'rgba(255,220,160,' + (0.75 * (1 - bt / 6)).toFixed(3) + ')';
+          ctx.lineWidth = 30;
+          ctx.beginPath(); ctx.arc(E.x, E.y, R2, 0, TAU); ctx.stroke();
+          ctx.strokeStyle = 'rgba(255,255,240,' + (0.5 * (1 - bt / 6)).toFixed(3) + ')';
+          ctx.lineWidth = 6;
+          ctx.beginPath(); ctx.arc(E.x, E.y, R2 + 40, 0, TAU); ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
+
     // core objective ring
     if (G.match && G.match.mode === 'core') {
       const C = WORLD / 2;
@@ -2880,11 +3021,18 @@
     }
     const D = G.W && G.W.danger;
     if (D && ((D.x / QUADPX) | 0) === qx && ((D.y / QUADPX) | 0) === qy) return 'THE MAELSTROM EXPANSE';
-    // the endless frontier: named by chart reference, region by bearing
+    const ref = String.fromCharCode(65 + qx) + (qy + 1);
+    if (G.W && G.W.deadZone && G.W.deadZone.qx === qx && G.W.deadZone.qy === qy)
+      return 'THE DEAD ZONE · ' + ref;
+    // the endless frontier: chart reference, region by bearing — and if a
+    // squad holds this ground, the chart says so
     const region = qy < MID ? (qx < MID ? 'NORTHWEST' : qx > MID ? 'NORTHEAST' : 'NORTHERN')
       : qy > MID ? (qx < MID ? 'SOUTHWEST' : qx > MID ? 'SOUTHEAST' : 'SOUTHERN')
       : qx < MID ? 'WESTERN' : 'EASTERN';
-    return 'THE ' + region + ' FRONTIER · ' + String.fromCharCode(65 + qx) + (qy + 1);
+    let name = 'THE ' + region + ' FRONTIER · ' + ref;
+    const own = G.W ? SIM.terrOwner(G.W, x, y) : 0;
+    if (own) name += ' · ' + SIM.FACTIONS[own].name.split(' ')[0] + ' HELD';
+    return name;
   }
 
   // the mothership: a capital-ship anchor at the heart of a squad's
@@ -3007,7 +3155,7 @@
 
     // MMO layer: credits + the upgrade bay
     if (G.mmo) {
-      txt('¢ ' + G.credits + '  ·  U upgrade bay', 20, narrow ? 104 : 126, narrow ? 10 : 12, '#fd8', 'left', 700);
+      txt('¢ ' + G.credits + '  ·  ◆ ' + G.relics + '  ·  U upgrade bay', 20, narrow ? 104 : 126, narrow ? 10 : 12, '#fd8', 'left', 700);
       if (G.upgOpen) drawUpgradeBay();
     }
 
@@ -3250,6 +3398,29 @@
         ctx.restore();
       }
     }
+    // relics glint on the scanner
+    if (G.W.relicSlots) {
+      ctx.fillStyle = 'rgba(220,150,255,0.95)';
+      for (const sl of G.W.relicSlots) {
+        if (sl.taken > -1 && G.W.time - sl.taken < 240) continue;
+        if (!on(sl.x, sl.y)) continue;
+        ctx.save();
+        ctx.translate(rx + (sl.x - wx) * k, ry + (sl.y - wy) * k);
+        ctx.rotate(Math.PI / 4);
+        ctx.fillRect(-2.5, -2.5, 5, 5);
+        ctx.restore();
+      }
+    }
+    // an active event pulses on the scanner
+    if (G.W.evt && on(G.W.evt.x, G.W.evt.y)) {
+      const E = G.W.evt;
+      const a = 0.5 + 0.5 * Math.sin(G.time * 8);
+      ctx.strokeStyle = 'rgba(255,160,80,' + a.toFixed(3) + ')';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(rx + (E.x - wx) * k, ry + (E.y - wy) * k, 6 + 3 * a, 0, TAU);
+      ctx.stroke();
+    }
     // the maelstrom and its gates paint on the scanner
     if (G.W.danger) {
       const D = G.W.danger;
@@ -3324,13 +3495,14 @@
     const y0 = Math.max(90, Math.min(vh - h - 10, vh / 2 - h / 2));
     panel(x, y0, w, h);
     txt('UPGRADE BAY', x + 14, y0 + 22, 15, '#c8ecff', 'left', 800);
-    txt('¢ ' + G.credits, x + w - 14, y0 + 22, 15, '#fd8', 'right', 800);
+    txt('¢ ' + G.credits + '  ◆ ' + G.relics, x + w - 14, y0 + 22, 15, '#fd8', 'right', 800);
     txt('1-9, 0 or tap to buy · U closes · upgrades survive death', x + 14, y0 + 40, 9.5, '#789', 'left');
     T.ui.upg = [];
     for (let i = 0; i < rows; i++) {
       const U = UPGRADES[i], lvl = G.upg[U.k] || 0, maxed = lvl >= U.max;
       const cost = maxed ? 0 : U.cost(lvl + 1);
-      const can = !maxed && G.credits >= cost;
+      const need = maxed || !U.rel ? 0 : U.rel(lvl + 1);
+      const can = !maxed && G.credits >= cost && G.relics >= need;
       const y = y0 + 52 + i * 34;
       txt(String((i + 1) % 10), x + 14, y + 13, 11, '#678', 'left', 700);
       txt(U.n, x + 32, y + 13, 13, maxed ? '#8f8' : can ? '#cfe' : '#88a', 'left', 700);
@@ -3338,7 +3510,7 @@
         ctx.fillStyle = pI < lvl ? 'hsla(150,80%,55%,0.95)' : 'rgba(255,255,255,0.12)';
         ctx.fillRect(x + 160 + pI * 12, y + 4, 8, 8);
       }
-      txt(maxed ? 'MAX' : '¢' + cost, x + w - 14, y + 13, 12, maxed ? '#8f8' : can ? '#fd8' : '#a66', 'right', 700);
+      txt(maxed ? 'MAX' : '¢' + cost + (need ? ' ◆' + need : ''), x + w - 14, y + 13, 12, maxed ? '#8f8' : can ? '#fd8' : '#a66', 'right', 700);
       txt(U.d, x + 32, y + 27, 9, '#678', 'left');
       T.ui.upg.push({ x, y: y - 3, w, h: 34, i });
     }
@@ -3606,28 +3778,31 @@
   function loadMMO() {
     try {
       const d = JSON.parse(GLOBAL.localStorage.getItem('interstellar-mmo') || '{}');
-      G.credits = d.c | 0; G.upg = d.u || {}; G.zoneTeam = d.sq | 0;
-    } catch (e) { G.credits = 0; G.upg = {}; }
+      G.credits = d.c | 0; G.relics = d.r | 0; G.upg = d.u || {}; G.zoneTeam = d.sq | 0;
+    } catch (e) { G.credits = 0; G.relics = 0; G.upg = {}; }
   }
   function saveMMO() {
-    try { GLOBAL.localStorage.setItem('interstellar-mmo', JSON.stringify({ c: G.credits, u: G.upg, sq: G.zoneTeam })); } catch (e) { }
+    try { GLOBAL.localStorage.setItem('interstellar-mmo', JSON.stringify({ c: G.credits, r: G.relics, u: G.upg, sq: G.zoneTeam })); } catch (e) { }
   }
+  const WING_NAMES = { 1: 'TALON', 2: 'HALO', 3: 'CINDER', 4: 'SHADE' };
 
   // ------------------------------------------------------------ upgrades
   // The Zone's power curve: no lucky greens — you SALVAGE credits from
   // kills and pickups, and buy permanent upgrades that survive death and
   // sessions. Match modes (duel/squad/core) stay classic for fairness.
+  // top tiers need RELICS — rare tech salvaged from the storm, the dead
+  // zone, rival fortress quadrants, and the deep belts
   const UPGRADES = [
-    { k: 'gun', n: 'Cannons', max: 2, cost: l => 220 + 160 * l, d: '+1 gun level' },
-    { k: 'bomb', n: 'Bombs', max: 2, cost: l => 260 + 180 * l, d: '+1 bomb level' },
-    { k: 'engine', n: 'Engines', max: 5, cost: l => 90 + 70 * l, d: '+6% thrust · +5% speed' },
-    { k: 'reactor', n: 'Reactor', max: 5, cost: l => 90 + 70 * l, d: '+7% max energy' },
-    { k: 'charger', n: 'Recharger', max: 5, cost: l => 90 + 70 * l, d: '+8% recharge' },
-    { k: 'multi', n: 'MultiFire', max: 1, cost: () => 420, d: 'spread fire' },
-    { k: 'prox', n: 'Prox Fuse', max: 2, cost: l => 300 + 150 * l, d: 'wider bomb detonation' },
-    { k: 'repel', n: 'Repel Rack', max: 3, cost: l => 130 + 90 * l, d: '+1 repel per spawn' },
-    { k: 'burst', n: 'Burst Rack', max: 3, cost: l => 130 + 90 * l, d: '+1 burst per spawn' },
-    { k: 'rocket', n: 'Rocket Pod', max: 3, cost: l => 110 + 80 * l, d: '+1 rocket per spawn' },
+    { k: 'gun', n: 'Cannons', max: 2, cost: l => 220 + 160 * l, rel: l => l === 2 ? 1 : 0, d: '+1 gun level' },
+    { k: 'bomb', n: 'Bombs', max: 2, cost: l => 260 + 180 * l, rel: l => l === 2 ? 1 : 0, d: '+1 bomb level' },
+    { k: 'engine', n: 'Engines', max: 5, cost: l => 90 + 70 * l, rel: l => l >= 4 ? 1 : 0, d: '+6% thrust · +5% speed' },
+    { k: 'reactor', n: 'Reactor', max: 5, cost: l => 90 + 70 * l, rel: l => l >= 4 ? 1 : 0, d: '+7% max energy' },
+    { k: 'charger', n: 'Recharger', max: 5, cost: l => 90 + 70 * l, rel: l => l >= 4 ? 1 : 0, d: '+8% recharge' },
+    { k: 'multi', n: 'MultiFire', max: 1, cost: () => 420, rel: () => 1, d: 'spread fire' },
+    { k: 'prox', n: 'Prox Fuse', max: 2, cost: l => 300 + 150 * l, rel: l => l === 2 ? 1 : 0, d: 'wider bomb detonation' },
+    { k: 'repel', n: 'Repel Rack', max: 3, cost: l => 130 + 90 * l, rel: l => l === 3 ? 1 : 0, d: '+1 repel per spawn' },
+    { k: 'burst', n: 'Burst Rack', max: 3, cost: l => 130 + 90 * l, rel: l => l === 3 ? 1 : 0, d: '+1 burst per spawn' },
+    { k: 'rocket', n: 'Rocket Pod', max: 3, cost: l => 110 + 80 * l, rel: l => l === 3 ? 1 : 0, d: '+1 rocket per spawn' },
   ];
   function applyUpgrades(p) {
     if (!p || !G.mmo) return;
@@ -3651,8 +3826,11 @@
     const lvl = G.upg[U.k] || 0;
     if (lvl >= U.max) { say(U.n + ' is already maxed.', '#fb6'); return; }
     const c = U.cost(lvl + 1);
+    const need = U.rel ? U.rel(lvl + 1) : 0;
     if (G.credits < c) { say('Not enough credits — ' + c + ' needed.', '#f88'); return; }
+    if (G.relics < need) { say('Requires ◆' + need + ' relic — salvage the storm, the dead zone, or rival space.', '#d9f'); return; }
     G.credits -= c;
+    G.relics -= need;
     G.upg[U.k] = lvl + 1;
     applyUpgrades(G.player);
     saveMMO();
@@ -3746,6 +3924,13 @@
       const F = SIM.FACTIONS[G.zoneTeam];
       say(F ? 'You fly for the ' + F.name + ' — the mothership shields its own.' : 'Freelancer: no squad, no masters, all salvage is yours.', '#8df');
       say('Salvage greens for credits · press U for the upgrade bay.', '#fd8');
+      // your wing forms up: squadmates who fly WITH you
+      if (G.zoneTeam) {
+        const mates = G.W.ships.filter(b => b.bot && b.team === G.zoneTeam && !b.marauder).slice(0, 2);
+        for (const m of mates) m.ai.escort = s.id;
+        if (mates.length)
+          say(WING_NAMES[G.zoneTeam] + ' WING forms on you — ' + mates.map(m => m.name).join(' & ') + ' fly your wing.', '#8fd4a8');
+      }
     }
     if (mode !== 'ffa') {
       for (let i = 0; i < 10; i++) {
@@ -3769,6 +3954,8 @@
       try { if (G.net) G.net.close(); } catch (e) { }
       G.net = null; G.online = false;
     }
+    // the wing stands down when their leader leaves
+    if (G.W && G.player) for (const b of G.W.ships) if (b.ai && b.ai.escort === G.player.id) b.ai.escort = 0;
     G.player = null;
     G.chatOpen = false;
     G.match = null;

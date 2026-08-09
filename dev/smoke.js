@@ -141,6 +141,78 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     console.log('OK  maelstrom: storm rock flies + damages, wormholes warp, deterministic');
   }
 
+  // territory, relics, wings, events
+  {
+    const Wt = SIM.createWorld({ seed: 77 });
+    Wt.opts.authority = true;
+    assert(Wt.deadZone && Wt.relicSlots.length === 14, 'dead zone + relic slots generated');
+    assert(SIM.terrOwner(Wt, (SIM.FACTIONS[1].qx + 0.5) * SIM.QUADPX, (SIM.FACTIONS[1].qy + 0.5) * SIM.QUADPX) === 1,
+      'faction home starts owned');
+    // capture: three team-2 ships parked in a neutral frontier quadrant
+    const capQ = { qx: 1, qy: 2 };
+    const caps = [];
+    for (let i = 0; i < 3; i++) {
+      const s = SIM.makeShip(Wt, 'corsair', 'bot', 'C' + i, null, 2);
+      SIM.spawnShip(Wt, s);
+      caps.push(s);
+    }
+    let capEv = null;
+    for (let i = 0; i < 50 * 60 && !capEv; i++) {
+      for (const s of caps) {
+        s.dead = false; s.energy = s.maxEnergy;
+        s.x = (capQ.qx + 0.5) * SIM.QUADPX; s.y = (capQ.qy + 0.5) * SIM.QUADPX;
+        s.vx = 0; s.vy = 0;
+      }
+      SIM.updateWorld(Wt, SIM.STEP);
+      for (const e of SIM.drainEvents(Wt)) if (e.e === 'capture') capEv = e;
+    }
+    assert(capEv && capEv.team === 2, 'presence captures a frontier quadrant');
+    assert(SIM.terrOwner(Wt, (capQ.qx + 0.5) * SIM.QUADPX, (capQ.qy + 0.5) * SIM.QUADPX) === 2, 'ownership recorded');
+    // relic pickup by a local human with the upgrade economy
+    const hu = SIM.makeShip(Wt, 'comet', 'local', 'Salvager');
+    SIM.spawnShip(Wt, hu);
+    hu.noGreens = true;
+    const sl = Wt.relicSlots[0];
+    hu.x = sl.x; hu.y = sl.y; hu.vx = 0; hu.vy = 0; hu.dead = false;
+    SIM.updateWorld(Wt, SIM.STEP);
+    const relEv = SIM.drainEvents(Wt).find(e => e.e === 'relic');
+    assert(relEv && sl.taken >= 0, 'relic salvaged and slot marked');
+    // wing escort: a wingmate with no target closes on its leader
+    const wing = caps[0];
+    wing.ai.escort = hu.id;
+    wing.team = 0; hu.team = 0;    // nobody to fight
+    hu.x = SIM.WORLD / 2 + 4000; hu.y = SIM.WORLD / 2; hu.dead = false;
+    wing.x = hu.x - 3000; wing.y = hu.y; wing.dead = false; wing.energy = wing.maxEnergy;
+    const d0 = Math.hypot(wing.x - hu.x, wing.y - hu.y);
+    for (let i = 0; i < 14 * 60; i++) {
+      hu.x = SIM.WORLD / 2 + 4000; hu.y = SIM.WORLD / 2; hu.vx = 0; hu.vy = 0; hu.dead = false;
+      wing.energy = wing.maxEnergy; wing.dead = false;
+      SIM.updateWorld(Wt, SIM.STEP);
+    }
+    SIM.drainEvents(Wt);
+    const d1 = Math.hypot(wing.x - hu.x, wing.y - hu.y);
+    assert(d1 < d0 * 0.5, 'wingmate forms on its leader (' + Math.round(d0) + ' -> ' + Math.round(d1) + ')');
+    // event timeline: all three types occur, deterministically
+    const seen = new Set();
+    for (let idx = 0; idx < 60; idx++) {
+      for (let p = 14; p < 70; p += 3) {
+        Wt.time = idx * 115 + p;
+        const E = SIM.evActive(Wt);
+        if (E) { seen.add(E.type); break; }
+      }
+    }
+    assert(seen.has('shower') && seen.has('marauders') && seen.has('nova'), 'all event types occur: ' + [...seen]);
+    // marauders spawn from the raid timeline on an authority world
+    let found = null;
+    for (let idx = 0; idx < 60 && !found; idx++) {
+      Wt.time = idx * 115 + 30;
+      const E = SIM.evActive(Wt);
+      if (E && E.type === 'marauders') { SIM.updateWorld(Wt, SIM.STEP); found = Wt.ships.find(s => s.marauder); }
+    }
+    assert(found && found.team === 5, 'marauder raid spawns hostile-to-all raiders');
+    console.log('OK  war economy: capture, relics, wing escort, event timeline, marauders');
+  }
+
   // map styles: deterministic per seed, distinct per style
   {
     const wN = SIM.createWorld({ seed: 5, mapStyle: 'nexus' });
