@@ -25,6 +25,8 @@
     parts: [], waves: [], msgs: [],
     cam: { x: WORLD / 2, y: WORLD / 2 }, shake: 0, hitFlash: 0,
     sel: 0, best: 0, deathBy: '',
+    // MMO layer: squad allegiance, credits, permanent upgrades, quadrant
+    zoneTeam: 0, credits: 0, upg: {}, mmo: false, upgOpen: false, quad: '',
     mode: 'ffa', pendingMode: 'squad', match: null,
     banner: null, lastKillT: -99, combo: 0, duelW: 0, duelL: 0,
     demoT: 0, demoShip: null,
@@ -78,6 +80,7 @@
     ];
     if (fsAvailable()) T.btns.push({ key: 'fs', label: '⛶', x: vw - 28, y: 108, r: 16 });
     if (G.online) T.btns.push({ key: 'chat', label: 'CHAT', x: 30, y: vh * 0.4, r: 24 * sc });
+    if (G.mmo) T.btns.push({ key: 'upg', label: '¢' + Math.min(999, G.credits), x: 30, y: vh * 0.55, r: 23 * sc });
     if (G.player && !G.player.t.blink && G.player.team &&
         G.W.ships.some(s => s !== G.player && !s.dead && s.team === G.player.team && s.type === 'comet')) {
       T.btns.push({ key: 'warp', label: 'WARP', x: vw - 258 * sc, y: bb - 170 * sc, r: 25 * sc });
@@ -110,6 +113,7 @@
     if (key === 'pause') { G.paused = !G.paused; return; }
     if (key === 'fs') { toggleFullscreen(); return; }
     if (key === 'chat') { mobileChat(); return; }
+    if (key === 'upg') { G.upgOpen = !G.upgOpen; return; }
     if (!p || p.dead || G.paused) return;
     if (key === 'fire') T.fire = true;
     else if (key === 'bomb') T.bomb = true;
@@ -144,10 +148,17 @@
       if (inRect(ui.prev)) { G.sel = (G.sel + SHIP_ORDER.length - 1) % SHIP_ORDER.length; return; }
       if (inRect(ui.next)) { G.sel = (G.sel + 1) % SHIP_ORDER.length; return; }
       if (inRect(ui.launch)) {
-        if (G.online) launchOnline(SHIP_ORDER[G.sel]); else startSolo(SHIP_ORDER[G.sel]);
+        launchOrPick(SHIP_ORDER[G.sel]);
         return;
       }
       if (inRect(ui.back)) { if (G.net) { try { G.net.close(); } catch (e) { } G.net = null; G.online = false; } G.state = 'title'; }
+    } else if (G.state === 'squadpick') {
+      if (ui.squads) for (const r of ui.squads) if (inRect(r)) {
+        G.zoneTeam = r.team; saveMMO();
+        startSolo(G.pendingShip || SHIP_ORDER[G.sel]);
+        return;
+      }
+      if (inRect(ui.back)) G.state = 'select';
     } else if (G.state === 'nameentry') {
       if (inRect(ui.nameBox)) { ensureNameInput(); if (nameInput) nameInput.focus(); return; }
       if (inRect(ui.connect)) {
@@ -161,6 +172,11 @@
     } else if (G.state === 'error') {
       netConnect();   // tap anywhere retries
     } else if (G.state === 'play') {
+      if (G.upgOpen && ui.upg) {
+        for (const r of ui.upg) if (inRect(r)) { buyUpgrade(r.i); return; }
+        G.upgOpen = false;
+        return;
+      }
       if (G.paused) { if (inRect(ui.abandon)) leaveToTitle(); else G.paused = false; return; }
       if (G.match && G.match.over && !G.online) {
         if (inRect(ui.hangar)) leaveToTitle();
@@ -1054,12 +1070,27 @@
             else if (G.combo >= 4) banner('KILLING FRENZY', G.combo + ' in a row');
             G.best = Math.max(G.best, G.player.score);
             saveBest();
+            if (G.mmo) {
+              const c = 30 + (e.bounty | 0);
+              G.credits += c; saveMMO();
+              say('+' + c + ' credits', '#fd8');
+            }
           }
           matchScoreKill(e);
           break;
         }
         case 'green':
-          if (mine) { say('Green: ' + e.name, '#ff6'); sndPrize(); }
+          if (mine && e.credit) {
+            G.credits += 12; saveMMO();
+            say('+12 credits (salvage)', '#fd8'); sndPrize();
+          } else if (mine) { say('Green: ' + e.name, '#ff6'); sndPrize(); }
+          break;
+        case 'spawn':
+          // upgrades survive death: reapply over the loadout reset
+          if (G.player && e.id === G.player.id && G.mmo) {
+            applyUpgrades(G.player);
+            G.player.energy = G.player.maxEnergy;
+          }
           break;
         case 'take':
           spark(e.x, e.y, 130, 8, 160);
@@ -1224,6 +1255,12 @@
         G.W.nextId = Math.max(G.W.nextId, msg.id + 1);
         SIM.spawnShip(G.W, me);
         G.player = me;
+        // online is the MMO layer too: salvage economy + upgrades
+        G.mmo = true;
+        me.noGreens = true;
+        applyUpgrades(me);
+        me.energy = me.maxEnergy;
+        G.quad = quadName(me.x, me.y);
         SIM.drainEvents(G.W);
         G.mode = team ? 'online-teams' : 'online-ffa';
         const isCore = G.zoneMode === 'core';
@@ -1390,8 +1427,21 @@
   // ---------------------------------------------------------------- world setup
   function newSoloWorld() {
     G.W = SIM.createWorld({ seed: (Math.random() * 1e9) | 0, spawnPrizes: true, zoneWorld: true });
+    // squad members respawn in their fortress keep, under the mothership;
+    // freelancers respawn in the contested mid-sector
+    G.W.opts.spawnPoint = sh => {
+      const ms = sh.team && G.W.motherships ? G.W.motherships[sh.team] : null;
+      if (!ms) return null;
+      const a = Math.random() * Math.PI * 2;
+      return {
+        x: ms.x + Math.cos(a) * 230, y: ms.y + Math.sin(a) * 230,
+        angle: Math.atan2(WORLD / 2 - ms.y, WORLD / 2 - ms.x),
+      };
+    };
     prerenderMap();
-    SIM.addBots(G.W, 20);
+    // the four squads wage their war with or without you
+    const bots = SIM.addBots(G.W, 20);
+    bots.forEach((b, i) => { b.team = [1, 2, 3, 4, 0][i % 5]; });
     for (let i = 0; i < 60; i++) {
       const p = SIM.randClearPoint(G.W);
       SIM.addPrize(G.W, p.x, p.y);
@@ -1413,13 +1463,16 @@
     const doc = GLOBAL.document;
     G.mapChunks = new Map();          // invalidates every baked chunk
 
+    // radar map at half tile resolution — a full-res canvas of a 3072-tile
+    // world would be 37MB of pixels for a 150px scanner
+    const DS = 2;
     const rc = doc.createElement('canvas');
-    rc.width = MAPS; rc.height = MAPS;
+    rc.width = MAPS / DS; rc.height = MAPS / DS;
     const r = rc.getContext('2d');
     r.fillStyle = '#41639f';
-    for (let ty = 0; ty < MAPS; ty++)
-      for (let tx = 0; tx < MAPS; tx++)
-        if (SIM.tileSolid(W, tx, ty)) r.fillRect(tx, ty, 1, 1);
+    for (let ty = 0; ty < MAPS; ty += DS)
+      for (let tx = 0; tx < MAPS; tx += DS)
+        if (SIM.tileSolid(W, tx, ty) || SIM.tileSolid(W, tx + 1, ty + 1)) r.fillRect(tx / DS, ty / DS, 1, 1);
     G.radarC = rc;
   }
 
@@ -1565,6 +1618,15 @@
     for (let i = G.contactFx.length - 1; i >= 0; i--) {
       G.contactFx[i].t += dt;
       if (G.contactFx[i].t > 2.6) G.contactFx.splice(i, 1);
+    }
+
+    // crossing a quadrant boundary is an event
+    if (G.player && !G.player.dead && G.state === 'play') {
+      const qn = quadName(G.player.x, G.player.y);
+      if (qn !== G.quad) {
+        if (G.quad) banner('ENTERING ' + qn, '', 2);
+        G.quad = qn;
+      }
     }
 
     // thrust exhaust for every live thrusting ship
@@ -2497,10 +2559,20 @@
           ctx.drawImage(mapChunk(cx, cy), cx * CHUNK_PX, cy * CHUNK_PX);
     }
 
+    const camL = G.cam.x - vw / 2 - 90, camR = G.cam.x + vw / 2 + 90;
+    const camT = G.cam.y - vh / 2 - 90, camB = G.cam.y + vh / 2 + 90;
+
+    // faction motherships anchored in their fortress keeps
+    if (W.motherships) {
+      for (const tk2 in W.motherships) {
+        const ms = W.motherships[tk2];
+        if (ms.x > camL - 300 && ms.x < camR + 300 && ms.y > camT - 300 && ms.y < camB + 300)
+          drawMothership(ms);
+      }
+    }
+
     // THE MAELSTROM: storm boundary, flying rock, wormholes
     if (W.danger) {
-      const camL = G.cam.x - vw / 2 - 90, camR = G.cam.x + vw / 2 + 90;
-      const camT = G.cam.y - vh / 2 - 90, camB = G.cam.y + vh / 2 + 90;
       const D = W.danger;
       if (D.x + D.r > camL && D.x - D.r < camR && D.y + D.r > camT && D.y - D.r < camB) {
         ctx.save();
@@ -2721,6 +2793,65 @@
   }
   function shipColor(s, l, a) { return 'hsla(' + s.hue + ',95%,' + l + '%,' + (a == null ? 1 : a) + ')'; }
 
+  // ------------------------------------------------------------ quadrants
+  const QUADPX = SIM.QUADPX;
+  function quadName(x, y) {
+    const qx = clamp((x / QUADPX) | 0, 0, 2), qy = clamp((y / QUADPX) | 0, 0, 2);
+    if (qx === 1 && qy === 1) return 'THE CONTESTED CORE';
+    for (const t in SIM.FACTIONS) {
+      const F = SIM.FACTIONS[t];
+      if (F.qx === qx && F.qy === qy) return F.name + ' SPACE';
+    }
+    const D = G.W && G.W.danger;
+    if (D && ((D.x / QUADPX) | 0) === qx && ((D.y / QUADPX) | 0) === qy) return 'THE MAELSTROM EXPANSE';
+    return qy === 0 ? 'THE NORTHERN VOID' : qy === 2 ? 'THE SOUTHERN VOID'
+      : qx === 0 ? 'THE WESTERN DEEP' : 'THE EASTERN DEEP';
+  }
+
+  // the mothership: a capital-ship anchor at the heart of a squad's
+  // fortress — drawn by hand, facing the war
+  function drawMothership(ms) {
+    const F = SIM.FACTIONS[ms.team];
+    const ang = Math.atan2(WORLD / 2 - ms.y, WORLD / 2 - ms.x);
+    ctx.save();
+    ctx.translate(ms.x, ms.y);
+    ctx.globalCompositeOperation = 'lighter';
+    drawGlow(0, 0, 260, F.hue, 0.22);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.rotate(ang);
+    const hull = [[190, 0], [150, 26], [60, 58], [-120, 46], [-172, 22], [-172, -22], [-120, -46], [60, -58], [150, -26]];
+    ctx.beginPath();
+    hull.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+    ctx.closePath();
+    ctx.fillStyle = '#1c2230';
+    ctx.fill();
+    ctx.strokeStyle = 'hsla(' + F.hue + ',70%,55%,0.6)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // faction stripe + spine
+    ctx.fillStyle = 'hsla(' + F.hue + ',65%,45%,0.5)';
+    ctx.fillRect(-150, -8, 300, 16);
+    ctx.strokeStyle = 'rgba(150,175,220,0.25)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(-165, 0); ctx.lineTo(185, 0); ctx.stroke();
+    // bridge dome
+    ctx.fillStyle = 'rgba(140,220,255,0.5)';
+    ctx.beginPath(); ctx.arc(80, 0, 13, 0, TAU); ctx.fill();
+    // running lights blink down the flanks
+    for (let i = 0; i < 7; i++) {
+      const lx = -150 + i * 45;
+      const on = Math.sin(G.time * 3 + i * 1.1) > 0;
+      ctx.fillStyle = on ? 'hsla(' + F.hue + ',95%,70%,0.95)' : 'rgba(70,80,100,0.5)';
+      ctx.fillRect(lx, -40 + Math.abs(i - 3) * 4, 3, 3);
+      ctx.fillRect(lx, 37 - Math.abs(i - 3) * 4, 3, 3);
+    }
+    // engine bloom
+    const pu = 0.6 + 0.4 * Math.sin(G.time * 2.2);
+    ctx.globalCompositeOperation = 'lighter';
+    for (const ey of [-26, 0, 26]) drawGlow(-185, ey, 26 * pu, 18, 0.5);
+    ctx.restore();
+  }
+
   // CONTACT markers + hunt compass: encounters are events, and deep space
   // always offers a heading toward the next one
   function drawContacts() {
@@ -2794,6 +2925,12 @@
     if (!p) return;
     const narrow = T.active && vw < 640;   // phone layout
     drawContacts();
+
+    // MMO layer: credits + the upgrade bay
+    if (G.mmo) {
+      txt('¢ ' + G.credits + '  ·  U upgrade bay', 20, narrow ? 104 : 126, narrow ? 10 : 12, '#fd8', 'left', 700);
+      if (G.upgOpen) drawUpgradeBay();
+    }
 
     // inside the maelstrom the screen itself feels hostile
     if (G.W.danger && !p.dead) {
@@ -2995,7 +3132,7 @@
     ctx.beginPath();
     ctx.rect(rx, ry, R, R);
     ctx.clip();
-    ctx.drawImage(G.radarC, wx / TILE, wy / TILE, RW / TILE, RW / TILE, rx, ry, R, R);
+    ctx.drawImage(G.radarC, wx / TILE / 2, wy / TILE / 2, RW / TILE / 2, RW / TILE / 2, rx, ry, R, R);
     ctx.strokeStyle = 'rgba(70,120,200,0.18)';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -3010,6 +3147,19 @@
     ctx.lineTo(rx + R / 2 + Math.cos(swa) * R / 2, ry + R / 2 + Math.sin(swa) * R / 2);
     ctx.stroke();
     const on = (x, y) => x >= wx && x <= wx + RW && y >= wy && y <= wy + RW;
+    // motherships paint as faction diamonds
+    if (G.W.motherships) {
+      for (const tk2 in G.W.motherships) {
+        const ms = G.W.motherships[tk2];
+        if (!on(ms.x, ms.y)) continue;
+        ctx.save();
+        ctx.translate(rx + (ms.x - wx) * k, ry + (ms.y - wy) * k);
+        ctx.rotate(Math.PI / 4);
+        ctx.fillStyle = 'hsla(' + SIM.FACTIONS[ms.team].hue + ',90%,62%,0.95)';
+        ctx.fillRect(-3, -3, 6, 6);
+        ctx.restore();
+      }
+    }
     // the maelstrom and its gates paint on the scanner
     if (G.W.danger) {
       const D = G.W.danger;
@@ -3042,11 +3192,65 @@
     ctx.strokeStyle = 'rgba(140,180,240,0.35)';
     ctx.strokeRect(rx + (G.cam.x - vw / 2 - wx) * k, ry + (G.cam.y - vh / 2 - wy) * k, vw * k, vh * k);
     ctx.restore();
-    // sector grid readout: 16x16 lettered cells across the whole map
+    // sector grid readout + current quadrant
     if (G.player) {
       const cell = WORLD / 16;
       const sx = clamp((G.player.x / cell) | 0, 0, 15), sy = clamp((G.player.y / cell) | 0, 0, 15);
       txt('SECTOR ' + String.fromCharCode(65 + sx) + (sy + 1), rx + R / 2, ry + 12, 10, 'rgba(150,195,255,0.75)', 'center', 600);
+      if (G.quad) txt(G.quad, rx + R / 2, ry + R - 5, 8.5, 'rgba(150,195,255,0.6)', 'center', 600);
+    }
+  }
+
+  function drawSquadPick() {
+    ctx.fillStyle = 'rgba(4,6,13,0.6)';
+    ctx.fillRect(0, 0, vw, vh);
+    txt('CHOOSE YOUR SQUAD', vw / 2, vh / 2 - 196, 32, '#c8ecff', 'center', 800);
+    txt('a squad holds a quadrant: fortress walls, a mothership that rearms its own, a gate to the core', vw / 2, vh / 2 - 166, 12, '#9ab', 'center');
+    T.ui = {};
+    T.ui.squads = [];
+    const opts = [1, 2, 3, 4, 0];
+    const w = Math.min(500, vw - 30), x = vw / 2 - w / 2;
+    const corner = F => (F.qy === 0 ? 'NORTH' : 'SOUTH') + '-' + (F.qx === 0 ? 'WEST' : 'EAST');
+    for (let i = 0; i < opts.length; i++) {
+      const t = opts[i], F = SIM.FACTIONS[t];
+      const y = vh / 2 - 136 + i * 58;
+      panel(x, y, w, 48);
+      if (G.zoneTeam === t) { ctx.strokeStyle = 'rgba(140,220,255,0.85)'; ctx.lineWidth = 2; rr(x, y, w, 48, 8); ctx.stroke(); }
+      const hue = F ? F.hue : 130;
+      ctx.fillStyle = 'hsla(' + hue + ',85%,60%,0.9)';
+      ctx.fillRect(x + 14, y + 15, 18, 18);
+      txt((i + 1) + ' · ' + (F ? F.name : 'FREELANCER'), x + 46, y + 21, 15, F ? 'hsl(' + hue + ',85%,75%)' : '#cde', 'left', 700);
+      txt(F ? corner(F) + ' quadrant · mothership · gate to the core' : 'no squad, no masters — hunt everyone', x + 46, y + 39, 10.5, '#89a', 'left');
+      T.ui.squads.push({ x, y, w, h: 48, team: t });
+    }
+    T.ui.back = { x: vw / 2 - 70, y: vh / 2 + 168, w: 140, h: 30 };
+    txt('1-5 choose · ENTER keeps ' + (SIM.FACTIONS[G.zoneTeam] ? SIM.FACTIONS[G.zoneTeam].name : 'FREELANCER') + ' · ESC back', vw / 2, vh / 2 + 188, 12, '#678', 'center');
+  }
+
+  function drawUpgradeBay() {
+    const rows = UPGRADES.length;
+    const w = Math.min(392, vw - 16), x = vw - w - 8;
+    const h = 56 + rows * 34;
+    const y0 = Math.max(90, Math.min(vh - h - 10, vh / 2 - h / 2));
+    panel(x, y0, w, h);
+    txt('UPGRADE BAY', x + 14, y0 + 22, 15, '#c8ecff', 'left', 800);
+    txt('¢ ' + G.credits, x + w - 14, y0 + 22, 15, '#fd8', 'right', 800);
+    txt('1-9, 0 or tap to buy · U closes · upgrades survive death', x + 14, y0 + 40, 9.5, '#789', 'left');
+    T.ui.upg = [];
+    for (let i = 0; i < rows; i++) {
+      const U = UPGRADES[i], lvl = G.upg[U.k] || 0, maxed = lvl >= U.max;
+      const cost = maxed ? 0 : U.cost(lvl + 1);
+      const can = !maxed && G.credits >= cost;
+      const y = y0 + 52 + i * 34;
+      txt(String((i + 1) % 10), x + 14, y + 13, 11, '#678', 'left', 700);
+      txt(U.n, x + 32, y + 13, 13, maxed ? '#8f8' : can ? '#cfe' : '#88a', 'left', 700);
+      for (let pI = 0; pI < U.max; pI++) {
+        ctx.fillStyle = pI < lvl ? 'hsla(150,80%,55%,0.95)' : 'rgba(255,255,255,0.12)';
+        ctx.fillRect(x + 160 + pI * 12, y + 4, 8, 8);
+      }
+      txt(maxed ? 'MAX' : '¢' + cost, x + w - 14, y + 13, 12, maxed ? '#8f8' : can ? '#fd8' : '#a66', 'right', 700);
+      txt(U.d, x + 32, y + 27, 9, '#678', 'left');
+      T.ui.upg.push({ x, y: y - 3, w, h: 34, i });
     }
   }
 
@@ -3281,6 +3485,7 @@
     if (vignette) ctx.drawImage(vignette, 0, 0, vw, vh);
     if (G.state === 'title') drawTitle();
     else if (G.state === 'select') drawSelect();
+    else if (G.state === 'squadpick') drawSquadPick();
     else if (G.state === 'nameentry') drawNameEntry();
     else if (G.state === 'connecting') drawConnecting();
     else if (G.state === 'error') drawError();
@@ -3308,11 +3513,74 @@
   function saveName(n) {
     try { GLOBAL.localStorage.setItem('interstellar-name', n); } catch (e) { }
   }
+  function loadMMO() {
+    try {
+      const d = JSON.parse(GLOBAL.localStorage.getItem('interstellar-mmo') || '{}');
+      G.credits = d.c | 0; G.upg = d.u || {}; G.zoneTeam = d.sq | 0;
+    } catch (e) { G.credits = 0; G.upg = {}; }
+  }
+  function saveMMO() {
+    try { GLOBAL.localStorage.setItem('interstellar-mmo', JSON.stringify({ c: G.credits, u: G.upg, sq: G.zoneTeam })); } catch (e) { }
+  }
+
+  // ------------------------------------------------------------ upgrades
+  // The Zone's power curve: no lucky greens — you SALVAGE credits from
+  // kills and pickups, and buy permanent upgrades that survive death and
+  // sessions. Match modes (duel/squad/core) stay classic for fairness.
+  const UPGRADES = [
+    { k: 'gun', n: 'Cannons', max: 2, cost: l => 220 + 160 * l, d: '+1 gun level' },
+    { k: 'bomb', n: 'Bombs', max: 2, cost: l => 260 + 180 * l, d: '+1 bomb level' },
+    { k: 'engine', n: 'Engines', max: 5, cost: l => 90 + 70 * l, d: '+6% thrust · +5% speed' },
+    { k: 'reactor', n: 'Reactor', max: 5, cost: l => 90 + 70 * l, d: '+7% max energy' },
+    { k: 'charger', n: 'Recharger', max: 5, cost: l => 90 + 70 * l, d: '+8% recharge' },
+    { k: 'multi', n: 'MultiFire', max: 1, cost: () => 420, d: 'spread fire' },
+    { k: 'prox', n: 'Prox Fuse', max: 2, cost: l => 300 + 150 * l, d: 'wider bomb detonation' },
+    { k: 'repel', n: 'Repel Rack', max: 3, cost: l => 130 + 90 * l, d: '+1 repel per spawn' },
+    { k: 'burst', n: 'Burst Rack', max: 3, cost: l => 130 + 90 * l, d: '+1 burst per spawn' },
+    { k: 'rocket', n: 'Rocket Pod', max: 3, cost: l => 110 + 80 * l, d: '+1 rocket per spawn' },
+  ];
+  function applyUpgrades(p) {
+    if (!p || !G.mmo) return;
+    const t = p.t, u = G.upg;
+    p.gunLevel = Math.min(3, t.gunLevel + (u.gun || 0));
+    p.bombLevel = Math.min(3, t.bombLevel + (u.bomb || 0));
+    p.thrust = t.thrust * (1 + 0.06 * (u.engine || 0));
+    p.maxSpeed = t.maxSpeed * (1 + 0.05 * (u.engine || 0));
+    p.maxEnergy = Math.round(t.maxEnergy * (1 + 0.07 * (u.reactor || 0)));
+    p.recharge = t.recharge * (1 + 0.08 * (u.charger || 0));
+    if (u.multi) { p.multi = true; p.multiOn = true; }
+    p.proxPlus = (t.proxStart || 0) + (u.prox || 0);
+    p.repels = Math.max(p.repels, (t.repelStart || 1) + (u.repel || 0));
+    p.bursts = Math.max(p.bursts, 1 + (u.burst || 0));
+    p.rockets = Math.max(p.rockets, u.rocket || 0);
+    p.noGreens = true;
+  }
+  function buyUpgrade(i) {
+    const U = UPGRADES[i];
+    if (!U || !G.mmo) return;
+    const lvl = G.upg[U.k] || 0;
+    if (lvl >= U.max) { say(U.n + ' is already maxed.', '#fb6'); return; }
+    const c = U.cost(lvl + 1);
+    if (G.credits < c) { say('Not enough credits — ' + c + ' needed.', '#f88'); return; }
+    G.credits -= c;
+    G.upg[U.k] = lvl + 1;
+    applyUpgrades(G.player);
+    saveMMO();
+    sndPrize();
+    say(U.n + ' upgraded to L' + (lvl + 1) + '.', '#8f8');
+  }
 
   // ---------------------------------------------------------------- flow
+  // zone launches route through the squad-pick screen first
+  function launchOrPick(shipKey) {
+    if (!G.online && G.pendingMode === 'ffa') { G.pendingShip = shipKey; G.state = 'squadpick'; return; }
+    if (G.online) launchOnline(shipKey); else startSolo(shipKey);
+  }
   function startSolo(shipKey) {
     const mode = G.pendingMode || 'ffa';
     G.mode = mode;
+    G.mmo = false;
+    G.upgOpen = false;
     G.online = false;
     if (G.net) { try { G.net.close(); } catch (e) { } G.net = null; }
     G.combo = 0; G.lastKillT = -99; G.banner = null;
@@ -3374,14 +3642,20 @@
         say('Squad battle: blue vs red. No friendly fire.', '#8df');
       }
     } else {
-      // THE ZONE: drop into the persistent world that's been fighting since
-      // boot — same bots, same scores, still there when you leave and return
+      // THE ZONE — the MMO layer: persistent world, squad territory,
+      // salvage credits, permanent upgrades
       G.match = null;
       if (!G.W || !G.W.opts.zoneWorld) newSoloWorld();
-      s = SIM.makeShip(G.W, shipKey, 'local', 'You');
+      G.mmo = true;
+      s = SIM.makeShip(G.W, shipKey, 'local', 'You', null, G.zoneTeam || 0);
+      s.noGreens = true;
       SIM.spawnShip(G.W, s);
-      say('Welcome to the zone — it was here before you, it stays after.', '#8df');
-      say('Collect greens. Guard your energy. Everything costs it.', '#8df');
+      applyUpgrades(s);
+      s.energy = s.maxEnergy;
+      G.quad = quadName(s.x, s.y);
+      const F = SIM.FACTIONS[G.zoneTeam];
+      say(F ? 'You fly for the ' + F.name + ' — the mothership shields its own.' : 'Freelancer: no squad, no masters, all salvage is yours.', '#8df');
+      say('Salvage greens for credits · press U for the upgrade bay.', '#fd8');
     }
     if (mode !== 'ffa') {
       for (let i = 0; i < 10; i++) {
@@ -3474,7 +3748,7 @@
 
   const HANDLED = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab',
     'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'Enter', 'Backspace', 'Escape',
-    'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyB', 'KeyE', 'KeyQ', 'KeyR', 'KeyT', 'KeyM', 'KeyN', 'KeyP', 'KeyF', 'KeyO']);
+    'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyB', 'KeyE', 'KeyQ', 'KeyR', 'KeyT', 'KeyM', 'KeyN', 'KeyP', 'KeyF', 'KeyO', 'KeyU']);
 
   function onKeyDown(e) {
     audioInit();
@@ -3529,6 +3803,20 @@
       return;
     }
     if (code === 'KeyF') { toggleFullscreen(); return; }
+    if (code === 'KeyU' && G.mmo && G.state === 'play' && !G.chatOpen) {
+      G.upgOpen = !G.upgOpen;
+      e.preventDefault();
+      return;
+    }
+    if (G.upgOpen && G.state === 'play' && !G.chatOpen) {
+      if (code === 'Escape') { G.upgOpen = false; e.preventDefault(); return; }
+      if (/^Digit\d$/.test(code)) {
+        const n = parseInt(code.slice(5), 10);
+        buyUpgrade(n === 0 ? 9 : n - 1);
+        e.preventDefault();
+        return;
+      }
+    }
 
     if (G.state === 'title') {
       if (code === 'Enter' || code === 'Space') { G.online = false; G.pendingMode = 'squad'; G.state = 'select'; }
@@ -3553,11 +3841,20 @@
       else if (/^Digit[1-9]$/.test(code)) G.sel = Math.min(n - 1, parseInt(code.slice(5), 10) - 1);
       else if (code === 'Digit0') G.sel = Math.min(n - 1, 9);
       else if (code === 'Enter') {
-        if (G.online) launchOnline(SHIP_ORDER[G.sel]);
-        else startSolo(SHIP_ORDER[G.sel]);
+        launchOrPick(SHIP_ORDER[G.sel]);
       } else if (code === 'Escape') {
         if (G.net) { try { G.net.close(); } catch (err) { } G.net = null; G.online = false; }
         G.state = 'title';
+      }
+    } else if (G.state === 'squadpick') {
+      if (code === 'Escape' || code === 'Backspace') G.state = 'select';
+      else if (/^Digit[1-5]$/.test(code)) {
+        const n = parseInt(code.slice(5), 10);
+        G.zoneTeam = n === 5 ? 0 : n;
+        saveMMO();
+        startSolo(G.pendingShip || SHIP_ORDER[G.sel]);
+      } else if (code === 'Enter') {
+        startSolo(G.pendingShip || SHIP_ORDER[G.sel]);
       }
     } else if (G.state === 'play') {
       if (code === 'KeyP' || (code === 'Escape' && !G.online)) { G.paused = !G.paused; return; }
@@ -3657,6 +3954,7 @@
     canvas = GLOBAL.document.getElementById('game');
     ctx = canvas.getContext('2d');
     loadBest();
+    loadMMO();
     resize();
     initBackdrop();
     newSoloWorld();

@@ -18,11 +18,36 @@ multikill callouts, and matches short enough to always want one more.
 | --- | --- |
 | **Duel** (`1` on the title screen) | You vs **the Ace** — a high-skill AI duelist. First to 5. Respawns are near-instant, facing each other across the central arena. Your lifetime W–L record is kept. |
 | **Squad Battle** (`2` or `Enter`) | 3v3 team dogfight vs bots — blue vs red, no friendly fire, anchored team spawns, wingmen that hunt with you. First to 15. Every ship keeps its own identity color — team reads from the blue/red halo ring, nameplates, and radar. |
-| **The Zone** (`3`) | Drop into the persistent living world — no match, no clock. The zone fights on while you're at the title screen and remembers everything when you return. |
+| **The Zone** (`3`) | The MMO layer: a persistent living world across a 3×3 grid of quadrants, where four squads wage territorial war. Pick a squad (or fly freelance), salvage credits, buy permanent upgrades. No match, no clock — the zone fights on while you're away and remembers everything. |
 
-All of it plays out across a **vast sector at the classic zone scale** — a
-1024×1024-tile map (16384px) that takes most of a minute to cross at full
-burn. The population concentrates in the mid-sector around the arena, so
+All of it plays out across **MMO-scale space**: a 3×3 grid of quadrants,
+each a full classic-zone sector — 3072×3072 tiles, 49km corner to corner,
+minutes to cross at full burn. **The center quadrant is the contested
+core**; the four corners belong to the squads. Crossing a quadrant
+boundary announces itself ("ENTERING THE WESTERN DEEP"), and the radar
+names where you are.
+
+**Squad territory.** Four squads — the **Crimson Pact**, **Cobalt
+Combine**, **Ember Syndicate**, and **Violet Dominion** — each hold a
+corner quadrant, anchored by a triple-walled fortress with a **mothership**
+in the keep: a capital-ship anchor whose shadow recharges its own squad
+2.4× faster, making home base a real place to rearm and regroup. A
+**faction gate** outside each fortress jumps squad ships straight to the
+core's rim, so territory means both a safe rear and a lane to the war.
+Pick your squad (or fly freelance) when you enter the Zone; bot squads
+fight the four-way war with or without you, and squad members respawn
+under their mothership.
+
+**Upgrades, not greens.** In the Zone, greens don't grant random powerups
+— you **salvage them for credits** (kills pay too: 30 + bounty). Press
+`U` for the **upgrade bay**: Cannons, Bombs, Engines, Reactor, Recharger,
+MultiFire, Prox Fuse, and Repel/Burst/Rocket racks — ten tracks with
+escalating prices. **Upgrades are permanent**: they survive death and are
+saved between sessions. Match modes (Duel, Squad, Core) stay classic —
+pure skill, greens and all.
+
+The whole map spans a scale where travel matters — a single quadrant is
+already a former full map: The population concentrates in the mid-sector around the arena, so
 fights are easy to find, while the enormous frontier beyond is open space
 for prize runs and long hypersonic chases — the starfield streaks with
 your speed. The corner radar is a **local scanner**, not a full-map view:

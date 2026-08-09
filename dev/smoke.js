@@ -108,7 +108,7 @@ const SIM = require(path.join(ROOT, 'sim.js'));
   {
     const Wd = SIM.createWorld({ seed: 99 });
     assert(Wd.danger && Wd.danger.r > 0, 'danger zone generated');
-    assert(Wd.rocks.length === 22 && Wd.wormholes.length === 4, 'rocks and wormholes exist');
+    assert(Wd.rocks.length === 22 && Wd.wormholes.length === 8, 'rocks, storm gates, and faction gates exist');
     const q0 = SIM.rockAt(Wd, Wd.rocks[0], 0), q5 = SIM.rockAt(Wd, Wd.rocks[0], 5);
     assert(Math.hypot(q5.x - q0.x, q5.y - q0.y) > 30, 'storm rock flies');
     const Wd2 = SIM.createWorld({ seed: 99 });

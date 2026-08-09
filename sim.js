@@ -18,13 +18,24 @@
 
   const TAU = Math.PI * 2;
   const TILE = 16;
-  // A vast sector of space at the classic zone scale: 1024x1024 tiles
-  // (16384px). Crossing it at full burn takes most of a minute — travel is
-  // a real phase of the game, and a contact out here is an event.
-  const MAPS = 1024;
+  // MMO-scale space: a 3x3 grid of QUADRANTS, each a full classic-zone
+  // sector (1024 tiles / 16384px). 49km corner to corner — crossing the
+  // whole map takes minutes. The center quadrant is the contested core;
+  // the four corners belong to the squads, each anchored by a mothership.
+  const QUAD = 1024;
+  const MAPS = QUAD * 3;
   const WORLD = TILE * MAPS;
+  const QUADPX = TILE * QUAD;
   const STEP = 1 / 60;
-  const PRIZE_CAP = 160;
+  const PRIZE_CAP = 220;
+
+  // the four squads that anchor the corner quadrants
+  const FACTIONS = {
+    1: { name: 'CRIMSON PACT', hue: 358, qx: 0, qy: 0 },
+    2: { name: 'COBALT COMBINE', hue: 215, qx: 2, qy: 0 },
+    3: { name: 'EMBER SYNDICATE', hue: 28, qx: 0, qy: 2 },
+    4: { name: 'VIOLET DOMINION', hue: 278, qx: 2, qy: 2 },
+  };
 
   const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
   const rand = (a, b) => a === undefined ? Math.random() : a + Math.random() * (b - a);
@@ -326,23 +337,40 @@
     const nGuard = style === 'rings' ? 4 : 6;
     for (let i = 0; i < nGuard; i++) {
       const ang = i / nGuard * TAU + rng() * 0.5;
-      const rad = MAPS * (0.2 + rng() * 0.08);
+      const rad = QUAD * (0.2 + rng() * 0.08);
       stampBase(MC + Math.cos(ang) * rad, MC + Math.sin(ang) * rad, rn(3));
     }
-    // frontier depots: destinations deep in the black
-    for (let i = 0, placed = 0; i < 40 && placed < 3; i++) {
+    // frontier depots: destinations deep in the black between the powers
+    for (let i = 0, placed = 0; i < 80 && placed < 6; i++) {
       const ang = rng() * TAU;
-      const rad = MAPS * (0.42 + rng() * 0.22);
+      const rad = QUAD * (0.55 + rng() * 0.55);
       const bx = MC + Math.cos(ang) * rad, by = MC + Math.sin(ang) * rad;
       if (bx < 45 || by < 45 || bx > MAPS - 45 || by > MAPS - 45) continue;
-      if (nearBase(bx, by, 30)) continue;
+      if (nearBase(bx, by, 40)) continue;
       stampBase(bx, by, rn(3));
       placed++;
     }
 
+    // FACTION FORTRESSES: each squad's home sits at the heart of its corner
+    // quadrant — triple-walled, gated on the axis toward the core, with the
+    // mothership anchored in the keep
+    W.motherships = {};
+    for (const team of [1, 2, 3, 4]) {
+      const F = FACTIONS[team];
+      const bx = F.qx * QUAD + (QUAD >> 1), by = F.qy * QUAD + (QUAD >> 1);
+      wallRect(bx - 26, by - 26, bx + 26, by + 26, 4);
+      wallRect(bx - 17, by - 17, bx + 17, by + 17, 5);
+      for (const [ux, uy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+        fillRect(bx + ux * 26 - 2, by + uy * 26 - 2, 5, 5, 1);
+        fillRect(bx + ux * 17 - 1, by + uy * 17 - 1, 3, 3, 1);
+      }
+      bases.push({ x: bx, y: by, r: 30 });
+      W.motherships[team] = { team, x: (bx + 0.5) * TILE, y: (by + 0.5) * TILE };
+    }
+
     // asteroid belts: rubble lives in BANDS around the sector, not
     // sprinkled everywhere — navigable arcs with real gaps
-    const nBelt = style === 'rings' ? 1 : style === 'gauntlet' ? 2 : 3;
+    const nBelt = style === 'rings' ? 3 : style === 'gauntlet' ? 4 : 5;
     for (let b = 0; b < nBelt; b++) {
       const a0 = rng() * TAU, span = 0.6 + rng() * 1.0;
       const rad = MAPS * (0.3 + rng() * 0.16);
@@ -361,7 +389,7 @@
 
     // derelicts: lone broken hulls drifting in the deep — landmarks, cover,
     // and proof that people flew out here once
-    for (let i = 0; i < 26; i++) {
+    for (let i = 0; i < 70; i++) {
       const x = 30 + rn(MAPS - 60), y = 30 + rn(MAPS - 60);
       if (inClearing(x, y, 10) || nearBase(x, y, 16) || hyp(x - MC, y - MC) < 60) continue;
       const w = 4 + rn(5), h = 3 + rn(4);
@@ -401,12 +429,12 @@
       drawRing(70, [0, 0.166, 0.333, 0.5, 0.666, 0.833], 0.035);
     }
     if (style === 'gauntlet') {
-      // long broken corridor walls channel the fights into lanes
+      // long broken corridor walls channel the core's fights into lanes
       for (let i = 0; i < 14; i++) {
         const horiz = rng() < 0.5;
         const len = 40 + rn(80);
-        const px = 10 + rn(MAPS - 20 - (horiz ? len : 0));
-        const py = 10 + rn(MAPS - 20 - (horiz ? 0 : len));
+        const px = QUAD + 10 + rn(QUAD - 20 - (horiz ? len : 0));
+        const py = QUAD + 10 + rn(QUAD - 20 - (horiz ? 0 : len));
         let gapAt = 6 + rn(8);
         for (let k = 0; k < len; k++) {
           if (k === gapAt) { k += 3; gapAt = k + 8 + rn(8); continue; }
@@ -541,6 +569,18 @@
       x: cx + Math.cos(ea) * R * 0.9, y: cy + Math.sin(ea) * R * 0.9,
       dx: WORLD / 2 + Math.cos(ea) * 950, dy: WORLD / 2 + Math.sin(ea) * 950,
     });
+    // faction gates: a jump from each squad's fortress door straight to the
+    // core's rim — territory means a safe rear base WITH a lane to the war
+    for (const team of [1, 2, 3, 4]) {
+      const ms = W.motherships && W.motherships[team];
+      if (!ms) continue;
+      const ddx = WORLD / 2 - ms.x, ddy = WORLD / 2 - ms.y;
+      const L = hyp(ddx, ddy) || 1;
+      W.wormholes.push({
+        x: ms.x + (ddx / L) * 560, y: ms.y + (ddy / L) * 560, r: 90, gate: team,
+        dx: WORLD / 2 - (ddx / L) * 2800, dy: WORLD / 2 - (ddy / L) * 2800,
+      });
+    }
   }
   function rockAt(W, rk, t) {
     const a1 = rk.p1 + rk.w1 * t, a2 = rk.p2 + rk.w2 * t;
@@ -644,6 +684,13 @@
     return PRIZE_TYPES[0];
   }
   function applyPrize(W, s, silent) {
+    // upgrade-economy ships (the MMO layer) don't power up from greens —
+    // they salvage them for credits instead; the pickup event still fires
+    if (s.noGreens) {
+      s.energy = s.maxEnergy;
+      if (!silent) ev(W, { e: 'green', id: s.id, name: 'Salvage', credit: 1 });
+      return 'Salvage';
+    }
     const p = weightedPrize(s);
     p.f(s);
     s.energy = Math.min(s.energy, s.maxEnergy);
@@ -1099,9 +1146,12 @@
     s.x = clamp(s.x, TILE * 2 + r, WORLD - TILE * 2 - r);
     s.y = clamp(s.y, TILE * 2 + r, WORLD - TILE * 2 - r);
 
-    // warden aura: allied wardens nearby boost recharge
+    // warden aura: allied wardens nearby boost recharge; the mothership's
+    // shadow rearms its squad far faster still
     let rech = s.recharge;
     if (s.team) {
+      const ms = W.motherships && W.motherships[s.team];
+      if (ms && hyp(ms.x - s.x, ms.y - s.y) < 700) rech *= 2.4;
       for (const o of W.ships) {
         if (o === s || o.dead || o.team !== s.team || o.type !== 'warden') continue;
         if (hyp(o.x - s.x, o.y - s.y) < 170) { rech *= 1.35; break; }
@@ -1261,7 +1311,7 @@
         }
         if (s.wormT <= 0) {
           for (const wh of W.wormholes) {
-            if (hyp(s.x - wh.x, s.y - wh.y) < 58) {
+            if (hyp(s.x - wh.x, s.y - wh.y) < (wh.r || 58)) {
               ev(W, { e: 'worm', id: s.id, x0: s.x, y0: s.y, x1: wh.dx, y1: wh.dy, hue: s.hue });
               s.x = wh.dx; s.y = wh.dy;
               s.wormT = 4;
@@ -1284,7 +1334,7 @@
   }
 
   return {
-    TAU, TILE, MAPS, WORLD, STEP, PRIZE_CAP,
+    TAU, TILE, MAPS, WORLD, STEP, PRIZE_CAP, QUAD, QUADPX, FACTIONS,
     SHIP_ORDER, SHIP_TYPES, PRIZE_TYPES, BOT_NAMES, HUES,
     clamp, rand, irand, pick, angleNorm, mulberry32,
     tileSolid, solidAtPx, rectSolid, losClear, randClearPoint, findSpawn, rockAt,
