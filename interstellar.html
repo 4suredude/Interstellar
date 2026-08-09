@@ -88,23 +88,28 @@
 
   const TAU = Math.PI * 2;
   const TILE = 16;
-  // MMO-scale space: a 3x3 grid of QUADRANTS, each a full classic-zone
-  // sector (1024 tiles / 16384px). 49km corner to corner — crossing the
-  // whole map takes minutes. The center quadrant is the contested core;
-  // the four corners belong to the squads, each anchored by a mothership.
+  // ENDLESS-scale space: a GRID x GRID lattice of QUADRANTS, each a full
+  // classic-zone sector (1024 tiles / 16384px). At 7x7 that's 49 sectors,
+  // 115km corner to corner — the tile field is stored SPARSELY (space is
+  // ~99.5% empty, so only chunks containing built structure exist in
+  // memory), which makes world size nearly free. The center quadrant is
+  // the contested core; the four corners belong to the squads.
   const QUAD = 1024;
-  const MAPS = QUAD * 3;
+  const GRID = 7;
+  const MAPS = QUAD * GRID;
   const WORLD = TILE * MAPS;
   const QUADPX = TILE * QUAD;
+  const TCH = 64;                        // tiles per sparse-store chunk edge
+  const TCHROW = Math.ceil(MAPS / TCH);  // chunks per row (key stride)
   const STEP = 1 / 60;
   const PRIZE_CAP = 220;
 
   // the four squads that anchor the corner quadrants
   const FACTIONS = {
     1: { name: 'CRIMSON PACT', hue: 358, qx: 0, qy: 0 },
-    2: { name: 'COBALT COMBINE', hue: 215, qx: 2, qy: 0 },
-    3: { name: 'EMBER SYNDICATE', hue: 28, qx: 0, qy: 2 },
-    4: { name: 'VIOLET DOMINION', hue: 278, qx: 2, qy: 2 },
+    2: { name: 'COBALT COMBINE', hue: 215, qx: GRID - 1, qy: 0 },
+    3: { name: 'EMBER SYNDICATE', hue: 28, qx: 0, qy: GRID - 1 },
+    4: { name: 'VIOLET DOMINION', hue: 278, qx: GRID - 1, qy: GRID - 1 },
   };
 
   const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
@@ -298,9 +303,12 @@
   ];
 
   // ------------------------------------------------------------ map
+  // sparse tile field: the world rim is a formula, empty space costs
+  // nothing, and only chunks something was built in are allocated
   function tileSolid(W, tx, ty) {
-    if (tx < 0 || ty < 0 || tx >= MAPS || ty >= MAPS) return true;
-    return W.map[ty * MAPS + tx] !== 0;
+    if (tx < 2 || ty < 2 || tx >= MAPS - 2 || ty >= MAPS - 2) return true;
+    const ch = W.tiles.get(((tx / TCH) | 0) * TCHROW + ((ty / TCH) | 0));
+    return ch ? ch[(ty % TCH) * TCH + (tx % TCH)] !== 0 : false;
   }
   function solidAtPx(W, x, y) { return tileSolid(W, (x / TILE) | 0, (y / TILE) | 0); }
   function rectSolid(W, x, y, w, h) {
@@ -324,12 +332,19 @@
     const rng = W.rng;
     const rn = n => (rng() * n) | 0;
     const style = W.opts.mapStyle || 'nexus';
-    const m = new Uint8Array(MAPS * MAPS);
-    const set = (x, y, v) => { if (x >= 0 && y >= 0 && x < MAPS && y < MAPS) m[y * MAPS + x] = v; };
+    W.tiles = new Map();
+    const set = (x, y, v) => {
+      if (x < 2 || y < 2 || x >= MAPS - 2 || y >= MAPS - 2) return;
+      const k = ((x / TCH) | 0) * TCHROW + ((y / TCH) | 0);
+      let ch = W.tiles.get(k);
+      if (!ch) {
+        if (!v) return;                  // clearing empty space is free
+        ch = new Uint8Array(TCH * TCH);
+        W.tiles.set(k, ch);
+      }
+      ch[(y % TCH) * TCH + (x % TCH)] = v;
+    };
     const fillRect = (x, y, w, h, v) => { for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) set(x + i, y + j, v); };
-
-    fillRect(0, 0, MAPS, 2, 1); fillRect(0, MAPS - 2, MAPS, 2, 1);
-    fillRect(0, 0, 2, MAPS, 1); fillRect(MAPS - 2, 0, 2, MAPS, 1);
 
     // The sector is OPEN SPACE. What structure exists was BUILT — or broke
     // apart out here. The architecture has logic: a citadel at the heart of
@@ -410,15 +425,18 @@
       const rad = QUAD * (0.2 + rng() * 0.08);
       stampBase(MC + Math.cos(ang) * rad, MC + Math.sin(ang) * rad, rn(3));
     }
-    // frontier depots: destinations deep in the black between the powers
-    for (let i = 0, placed = 0; i < 80 && placed < 6; i++) {
-      const ang = rng() * TAU;
-      const rad = QUAD * (0.55 + rng() * 0.55);
-      const bx = MC + Math.cos(ang) * rad, by = MC + Math.sin(ang) * rad;
-      if (bx < 45 || by < 45 || bx > MAPS - 45 || by > MAPS - 45) continue;
-      if (nearBase(bx, by, 40)) continue;
-      stampBase(bx, by, rn(3));
-      placed++;
+    // frontier depots: most quadrants get a destination of their own, so
+    // however far you roam there's somewhere to dock and something to raid
+    for (let qy = 0; qy < GRID; qy++) {
+      for (let qx = 0; qx < GRID; qx++) {
+        const isCore = qx === (GRID >> 1) && qy === (GRID >> 1);
+        const isFaction = Object.values(FACTIONS).some(F => F.qx === qx && F.qy === qy);
+        if (isCore || isFaction || rng() < 0.25) continue;
+        const bx = qx * QUAD + (QUAD >> 1) + rn(QUAD >> 1) - (QUAD >> 2);
+        const by = qy * QUAD + (QUAD >> 1) + rn(QUAD >> 1) - (QUAD >> 2);
+        stampBase(bx, by, rn(3));
+        if (rng() < 0.3) stampBase(bx + 90 + rn(120), by + rn(160) - 80, rn(3));  // twin outpost
+      }
     }
 
     // FACTION FORTRESSES: each squad's home sits at the heart of its corner
@@ -440,10 +458,10 @@
 
     // asteroid belts: rubble lives in BANDS around the sector, not
     // sprinkled everywhere — navigable arcs with real gaps
-    const nBelt = style === 'rings' ? 3 : style === 'gauntlet' ? 4 : 5;
+    const nBelt = style === 'rings' ? 4 : style === 'gauntlet' ? 6 : 8;
     for (let b = 0; b < nBelt; b++) {
       const a0 = rng() * TAU, span = 0.6 + rng() * 1.0;
-      const rad = MAPS * (0.3 + rng() * 0.16);
+      const rad = MAPS * (0.16 + rng() * 0.3);
       const wob = 5 + rn(8);
       const steps = Math.round(rad * span);
       for (let i = 0; i < steps; i++) {
@@ -459,7 +477,7 @@
 
     // derelicts: lone broken hulls drifting in the deep — landmarks, cover,
     // and proof that people flew out here once
-    for (let i = 0; i < 70; i++) {
+    for (let i = 0; i < 240; i++) {
       const x = 30 + rn(MAPS - 60), y = 30 + rn(MAPS - 60);
       if (inClearing(x, y, 10) || nearBase(x, y, 16) || hyp(x - MC, y - MC) < 60) continue;
       const w = 4 + rn(5), h = 3 + rn(4);
@@ -500,11 +518,12 @@
     }
     if (style === 'gauntlet') {
       // long broken corridor walls channel the core's fights into lanes
+      const Q0 = (GRID >> 1) * QUAD;   // the core quadrant's origin
       for (let i = 0; i < 14; i++) {
         const horiz = rng() < 0.5;
         const len = 40 + rn(80);
-        const px = QUAD + 10 + rn(QUAD - 20 - (horiz ? len : 0));
-        const py = QUAD + 10 + rn(QUAD - 20 - (horiz ? 0 : len));
+        const px = Q0 + 10 + rn(QUAD - 20 - (horiz ? len : 0));
+        const py = Q0 + 10 + rn(QUAD - 20 - (horiz ? 0 : len));
         let gapAt = 6 + rn(8);
         for (let k = 0; k < len; k++) {
           if (k === gapAt) { k += 3; gapAt = k + 8 + rn(8); continue; }
@@ -516,9 +535,6 @@
         }
       }
     }
-    fillRect(0, 0, MAPS, 2, 1); fillRect(0, MAPS - 2, MAPS, 2, 1);
-    fillRect(0, 0, 2, MAPS, 1); fillRect(MAPS - 2, 0, 2, MAPS, 1);
-    W.map = m;
     // bases in world px — prize caches spawn around them, giving every
     // installation a reason to be visited (and fought over)
     W.bases = bases.map(b => ({ x: (b.x + 0.5) * TILE, y: (b.y + 0.5) * TILE, r: b.r * TILE }));
@@ -620,7 +636,7 @@
     // three gates in normal space open INTO the storm; a fourth at the
     // storm's rim leads back toward the citadel — the way home
     W.wormholes = [];
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 6; i++) {
       let x = WORLD / 2 + 2000 + i * 900, y = WORLD / 2 + 2000;
       for (let t = 0; t < 40; t++) {
         const a = rng() * TAU, rad = WORLD * (0.14 + rng() * 0.3);
@@ -1094,10 +1110,16 @@
           if (d < pd) { pd = d; pz = p; }
         }
         // no green in reach: mostly drift back toward the mid-sector hotspot
-        // (keeps the zone's fights findable in a huge map), sometimes strike
-        // out for the frontier
-        a.wp = pz ? { x: pz.x, y: pz.y }
-          : Math.random() < 0.6 ? midSectorPoint(W) : randClearPoint(W);
+        // (keeps the zone's fights findable in an endless map), sometimes
+        // wander LOCALLY — never a blind trek across 100km of nothing
+        if (pz) a.wp = { x: pz.x, y: pz.y };
+        else if (Math.random() < 0.6) a.wp = midSectorPoint(W);
+        else {
+          const a2 = rand(0, TAU), rr2 = rand(1200, 4200);
+          const nx = clamp(s.x + Math.cos(a2) * rr2, TILE * 4, WORLD - TILE * 4);
+          const ny = clamp(s.y + Math.sin(a2) * rr2, TILE * 4, WORLD - TILE * 4);
+          a.wp = solidAtPx(W, nx, ny) ? midSectorPoint(W) : { x: nx, y: ny };
+        }
       }
       desired = Math.atan2(a.wp.y - s.y, a.wp.x - s.x); th = 0.85;
     }
@@ -1334,6 +1356,9 @@
           // a third of the greens cache around installations — bases are
           // supply depots, worth flying to and worth fighting over — and a
           // share falls inside the maelstrom: the best loot sits in the storm
+          // in an endless world, loot follows the population: bases,
+          // the maelstrom, and the contested mid-sector get most of it —
+          // the rest scatters for the far roamers to stumble on
           let p = null;
           const roll = Math.random();
           if (W.bases && W.bases.length && roll < 0.35) {
@@ -1342,6 +1367,8 @@
           } else if (W.danger && roll < 0.5) {
             const a = rand(0, TAU), rr = Math.sqrt(rand()) * W.danger.r * 0.85;
             p = findClearNear(W, W.danger.x + Math.cos(a) * rr, W.danger.y + Math.sin(a) * rr);
+          } else if (roll < 0.78) {
+            p = midSectorPoint(W);
           }
           if (!p) p = randClearPoint(W);
           const pr = addPrize(W, p.x, p.y);
@@ -1404,7 +1431,7 @@
   }
 
   return {
-    TAU, TILE, MAPS, WORLD, STEP, PRIZE_CAP, QUAD, QUADPX, FACTIONS,
+    TAU, TILE, MAPS, WORLD, STEP, PRIZE_CAP, QUAD, QUADPX, GRID, FACTIONS,
     SHIP_ORDER, SHIP_TYPES, PRIZE_TYPES, BOT_NAMES, HUES,
     clamp, rand, irand, pick, angleNorm, mulberry32,
     tileSolid, solidAtPx, rectSolid, losClear, randClearPoint, findSpawn, rockAt,
@@ -2885,17 +2912,8 @@
     const doc = GLOBAL.document;
     G.mapChunks = new Map();          // invalidates every baked chunk
 
-    // radar map at half tile resolution — a full-res canvas of a 3072-tile
-    // world would be 37MB of pixels for a 150px scanner
-    const DS = 2;
-    const rc = doc.createElement('canvas');
-    rc.width = MAPS / DS; rc.height = MAPS / DS;
-    const r = rc.getContext('2d');
-    r.fillStyle = '#41639f';
-    for (let ty = 0; ty < MAPS; ty += DS)
-      for (let tx = 0; tx < MAPS; tx += DS)
-        if (SIM.tileSolid(W, tx, ty) || SIM.tileSolid(W, tx + 1, ty + 1)) r.fillRect(tx / DS, ty / DS, 1, 1);
-    G.radarC = rc;
+    // no radar prerender: the endless world's scanner samples the sparse
+    // tile field live, drawing only its local window each frame
   }
 
   function mapChunk(chx, chy) {
@@ -4218,16 +4236,20 @@
   // ------------------------------------------------------------ quadrants
   const QUADPX = SIM.QUADPX;
   function quadName(x, y) {
-    const qx = clamp((x / QUADPX) | 0, 0, 2), qy = clamp((y / QUADPX) | 0, 0, 2);
-    if (qx === 1 && qy === 1) return 'THE CONTESTED CORE';
+    const GR = SIM.GRID, MID = GR >> 1;
+    const qx = clamp((x / QUADPX) | 0, 0, GR - 1), qy = clamp((y / QUADPX) | 0, 0, GR - 1);
+    if (qx === MID && qy === MID) return 'THE CONTESTED CORE';
     for (const t in SIM.FACTIONS) {
       const F = SIM.FACTIONS[t];
       if (F.qx === qx && F.qy === qy) return F.name + ' SPACE';
     }
     const D = G.W && G.W.danger;
     if (D && ((D.x / QUADPX) | 0) === qx && ((D.y / QUADPX) | 0) === qy) return 'THE MAELSTROM EXPANSE';
-    return qy === 0 ? 'THE NORTHERN VOID' : qy === 2 ? 'THE SOUTHERN VOID'
-      : qx === 0 ? 'THE WESTERN DEEP' : 'THE EASTERN DEEP';
+    // the endless frontier: named by chart reference, region by bearing
+    const region = qy < MID ? (qx < MID ? 'NORTHWEST' : qx > MID ? 'NORTHEAST' : 'NORTHERN')
+      : qy > MID ? (qx < MID ? 'SOUTHWEST' : qx > MID ? 'SOUTHEAST' : 'SOUTHERN')
+      : qx < MID ? 'WESTERN' : 'EASTERN';
+    return 'THE ' + region + ' FRONTIER · ' + String.fromCharCode(65 + qx) + (qy + 1);
   }
 
   // the mothership: a capital-ship anchor at the heart of a squad's
@@ -4554,7 +4576,18 @@
     ctx.beginPath();
     ctx.rect(rx, ry, R, R);
     ctx.clip();
-    ctx.drawImage(G.radarC, wx / TILE / 2, wy / TILE / 2, RW / TILE / 2, RW / TILE / 2, rx, ry, R, R);
+    // sample the sparse tile field live across the scanner window — space
+    // is ~99.5% empty, so this paints a handful of rects per frame
+    {
+      const step = RW / R;               // world px per radar px
+      ctx.fillStyle = '#41639f';
+      for (let py = 0; py < R; py += 2) {
+        const ty = ((wy + py * step) / TILE) | 0;
+        for (let px = 0; px < R; px += 2) {
+          if (SIM.tileSolid(G.W, ((wx + px * step) / TILE) | 0, ty)) ctx.fillRect(rx + px, ry + py, 2, 2);
+        }
+      }
+    }
     ctx.strokeStyle = 'rgba(70,120,200,0.18)';
     ctx.lineWidth = 1;
     ctx.beginPath();

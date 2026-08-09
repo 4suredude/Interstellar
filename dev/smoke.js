@@ -24,12 +24,22 @@ function finiteShip(s) {
 const SIM = require(path.join(ROOT, 'sim.js'));
 {
   const W = SIM.createWorld({ seed: 42, spawnPrizes: true });
-  assert(W.map.length === SIM.MAPS * SIM.MAPS, 'map generated');
-  // deterministic map from seed
+  // sparse tile field: rim solid, arena open, structure exists
+  assert(SIM.tileSolid(W, 0, 0) && SIM.tileSolid(W, SIM.MAPS - 1, SIM.MAPS - 1), 'world rim is solid');
+  assert(!SIM.tileSolid(W, (SIM.MAPS / 2) | 0, (SIM.MAPS / 2) | 0), 'arena interior is open');
+  assert(W.tiles.size > 100, 'sparse map has structure chunks');
+  // deterministic map from seed (signature over the core region)
+  const mapSig = w => {
+    let h = 0;
+    const C = (SIM.MAPS / 2) | 0;
+    for (let y = C - 520; y < C + 520; y += 13)
+      for (let x = C - 520; x < C + 520; x += 13) h = (h * 31 + (SIM.tileSolid(w, x, y) ? 1 : 0)) | 0;
+    return h;
+  };
   const W2 = SIM.createWorld({ seed: 42 });
-  assert(Buffer.from(W.map).equals(Buffer.from(W2.map)), 'same seed -> same map');
+  assert(mapSig(W) === mapSig(W2) && W.bases[0].x === W2.bases[0].x, 'same seed -> same map');
   const W3 = SIM.createWorld({ seed: 43 });
-  assert(!Buffer.from(W.map).equals(Buffer.from(W3.map)), 'different seed -> different map');
+  assert(W.bases[0].x !== W3.bases[0].x, 'different seed -> different map');
 
   SIM.addBots(W, 10);
   assert(W.ships.length === 10, 'ten bots spawned');
@@ -108,7 +118,7 @@ const SIM = require(path.join(ROOT, 'sim.js'));
   {
     const Wd = SIM.createWorld({ seed: 99 });
     assert(Wd.danger && Wd.danger.r > 0, 'danger zone generated');
-    assert(Wd.rocks.length === 22 && Wd.wormholes.length === 8, 'rocks, storm gates, and faction gates exist');
+    assert(Wd.rocks.length === 22 && Wd.wormholes.length === 11, 'rocks, storm gates, and faction gates exist');
     const q0 = SIM.rockAt(Wd, Wd.rocks[0], 0), q5 = SIM.rockAt(Wd, Wd.rocks[0], 5);
     assert(Math.hypot(q5.x - q0.x, q5.y - q0.y) > 30, 'storm rock flies');
     const Wd2 = SIM.createWorld({ seed: 99 });
@@ -137,9 +147,16 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     const wG = SIM.createWorld({ seed: 5, mapStyle: 'gauntlet' });
     const wR = SIM.createWorld({ seed: 5, mapStyle: 'rings' });
     const wR2 = SIM.createWorld({ seed: 5, mapStyle: 'rings' });
-    assert(!Buffer.from(wN.map).equals(Buffer.from(wG.map)), 'gauntlet differs from nexus');
-    assert(!Buffer.from(wN.map).equals(Buffer.from(wR.map)), 'rings differs from nexus');
-    assert(Buffer.from(wR.map).equals(Buffer.from(wR2.map)), 'same style+seed -> identical map');
+    const coreSig = w => {
+      let h = 0;
+      const C = (SIM.MAPS / 2) | 0;
+      for (let y = C - 500; y < C + 500; y += 11)
+        for (let x = C - 500; x < C + 500; x += 11) h = (h * 31 + (SIM.tileSolid(w, x, y) ? 1 : 0)) | 0;
+      return h;
+    };
+    assert(coreSig(wN) !== coreSig(wG), 'gauntlet differs from nexus');
+    assert(coreSig(wN) !== coreSig(wR), 'rings differs from nexus');
+    assert(coreSig(wR) === coreSig(wR2), 'same style+seed -> identical map');
   }
 
   // support roles: warden aura + comet warp beacon

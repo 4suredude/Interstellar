@@ -1463,17 +1463,8 @@
     const doc = GLOBAL.document;
     G.mapChunks = new Map();          // invalidates every baked chunk
 
-    // radar map at half tile resolution — a full-res canvas of a 3072-tile
-    // world would be 37MB of pixels for a 150px scanner
-    const DS = 2;
-    const rc = doc.createElement('canvas');
-    rc.width = MAPS / DS; rc.height = MAPS / DS;
-    const r = rc.getContext('2d');
-    r.fillStyle = '#41639f';
-    for (let ty = 0; ty < MAPS; ty += DS)
-      for (let tx = 0; tx < MAPS; tx += DS)
-        if (SIM.tileSolid(W, tx, ty) || SIM.tileSolid(W, tx + 1, ty + 1)) r.fillRect(tx / DS, ty / DS, 1, 1);
-    G.radarC = rc;
+    // no radar prerender: the endless world's scanner samples the sparse
+    // tile field live, drawing only its local window each frame
   }
 
   function mapChunk(chx, chy) {
@@ -2796,16 +2787,20 @@
   // ------------------------------------------------------------ quadrants
   const QUADPX = SIM.QUADPX;
   function quadName(x, y) {
-    const qx = clamp((x / QUADPX) | 0, 0, 2), qy = clamp((y / QUADPX) | 0, 0, 2);
-    if (qx === 1 && qy === 1) return 'THE CONTESTED CORE';
+    const GR = SIM.GRID, MID = GR >> 1;
+    const qx = clamp((x / QUADPX) | 0, 0, GR - 1), qy = clamp((y / QUADPX) | 0, 0, GR - 1);
+    if (qx === MID && qy === MID) return 'THE CONTESTED CORE';
     for (const t in SIM.FACTIONS) {
       const F = SIM.FACTIONS[t];
       if (F.qx === qx && F.qy === qy) return F.name + ' SPACE';
     }
     const D = G.W && G.W.danger;
     if (D && ((D.x / QUADPX) | 0) === qx && ((D.y / QUADPX) | 0) === qy) return 'THE MAELSTROM EXPANSE';
-    return qy === 0 ? 'THE NORTHERN VOID' : qy === 2 ? 'THE SOUTHERN VOID'
-      : qx === 0 ? 'THE WESTERN DEEP' : 'THE EASTERN DEEP';
+    // the endless frontier: named by chart reference, region by bearing
+    const region = qy < MID ? (qx < MID ? 'NORTHWEST' : qx > MID ? 'NORTHEAST' : 'NORTHERN')
+      : qy > MID ? (qx < MID ? 'SOUTHWEST' : qx > MID ? 'SOUTHEAST' : 'SOUTHERN')
+      : qx < MID ? 'WESTERN' : 'EASTERN';
+    return 'THE ' + region + ' FRONTIER · ' + String.fromCharCode(65 + qx) + (qy + 1);
   }
 
   // the mothership: a capital-ship anchor at the heart of a squad's
@@ -3132,7 +3127,18 @@
     ctx.beginPath();
     ctx.rect(rx, ry, R, R);
     ctx.clip();
-    ctx.drawImage(G.radarC, wx / TILE / 2, wy / TILE / 2, RW / TILE / 2, RW / TILE / 2, rx, ry, R, R);
+    // sample the sparse tile field live across the scanner window — space
+    // is ~99.5% empty, so this paints a handful of rects per frame
+    {
+      const step = RW / R;               // world px per radar px
+      ctx.fillStyle = '#41639f';
+      for (let py = 0; py < R; py += 2) {
+        const ty = ((wy + py * step) / TILE) | 0;
+        for (let px = 0; px < R; px += 2) {
+          if (SIM.tileSolid(G.W, ((wx + px * step) / TILE) | 0, ty)) ctx.fillRect(rx + px, ry + py, 2, 2);
+        }
+      }
+    }
     ctx.strokeStyle = 'rgba(70,120,200,0.18)';
     ctx.lineWidth = 1;
     ctx.beginPath();

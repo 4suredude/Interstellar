@@ -20,12 +20,17 @@ multikill callouts, and matches short enough to always want one more.
 | **Squad Battle** (`2` or `Enter`) | 3v3 team dogfight vs bots — blue vs red, no friendly fire, anchored team spawns, wingmen that hunt with you. First to 15. Every ship keeps its own identity color — team reads from the blue/red halo ring, nameplates, and radar. |
 | **The Zone** (`3`) | The MMO layer: a persistent living world across a 3×3 grid of quadrants, where four squads wage territorial war. Pick a squad (or fly freelance), salvage credits, buy permanent upgrades. No match, no clock — the zone fights on while you're away and remembers everything. |
 
-All of it plays out across **MMO-scale space**: a 3×3 grid of quadrants,
-each a full classic-zone sector — 3072×3072 tiles, 49km corner to corner,
-minutes to cross at full burn. **The center quadrant is the contested
-core**; the four corners belong to the squads. Crossing a quadrant
-boundary announces itself ("ENTERING THE WESTERN DEEP"), and the radar
-names where you are.
+All of it plays out across **endless space**: a 7×7 lattice of quadrants
+— 49 full classic-zone sectors, **115 kilometres corner to corner**,
+minutes of hypersonic flight to cross. The tile field is stored
+*sparsely* (space is ~99.5% empty, so only chunks containing built
+structure exist in memory — 3.5MB where a dense map would take 49MB),
+which makes the world size nearly free; the radar samples it live.
+**The center quadrant is the contested core**; the four corners belong
+to the squads; everything between is frontier, charted by bearing and
+grid reference ("ENTERING THE SOUTHWEST FRONTIER · B6"). Most quadrants
+hold a depot or twin outposts worth raiding, eight asteroid belts sweep
+the deep, and two hundred derelicts drift as landmarks.
 
 **Squad territory.** Four squads — the **Crimson Pact**, **Cobalt
 Combine**, **Ember Syndicate**, and **Violet Dominion** — each hold a
