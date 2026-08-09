@@ -233,9 +233,20 @@ A new generation of hulls joins the fleet — each with a mechanic all its own:
 - **All audio is synthesized live — zero asset files.** Sound effects (guns,
   bombs, explosions, repels, blinks, bounces, low-energy warnings) are
   WebAudio-generated with distance attenuation, and the soundtrack is
-  **adaptive generative rave electronica** at 126 BPM: a music director
-  reads the fight — enemy proximity, hits, kills — into a live intensity
-  and steers the arrangement bar by bar. Cruise empty space and it stays
+  **adaptive generative rave electronica with four regional palettes** —
+  the score has two axes: WHERE you are picks the palette, the fight
+  picks the intensity. **Frontier** (deep space): the A-minor home
+  identity at 126 BPM. **Home** (your squad's own quadrant): relative-
+  major warmth at 112 BPM, bell-heavy, soft kick, no acid — a safe
+  harbor. **Core** (the contested core, or any *enemy* squad's space):
+  phrygian ♭II war harmony at 132 BPM. **Storm** (the Maelstrom):
+  diminished clusters at 138 BPM over a saw drone, dissonant chimes,
+  an acid line that runs diminished and never lets up. The same
+  two-bar theme hook threads through every palette (A minor being
+  C major's relative), and palette changes wait for a musical seam —
+  except the storm, which takes over immediately. Under all of it, a
+  music director reads the fight — enemy proximity, hits, kills — into
+  a live intensity and steers the arrangement bar by bar. Cruise empty space and it stays
   ambient (detuned pads, glass bells whispering the theme, space echo);
   contact closes in and an eight-bar build starts climbing — accelerating
   snare rolls, a four-bar riser, the filter opening; then the **drop**:
