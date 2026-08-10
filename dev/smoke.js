@@ -669,6 +669,27 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     assert(A.msgs.some(m => m.t === 'leave' && m.id === bId), 'A saw Bob leave');
 
     A.ws.close();
+
+    // un-joined socket lifetime: a pilot sitting on the ship-select screen
+    // holds an open, un-joined socket and sends keepalives — it must survive.
+    // Only a SILENT handshake-and-hold may be reaped. (Runs last: the wait
+    // would starve the joined clients above, which send no keepalives.)
+    {
+      const sel = new WebSocket('ws://localhost:' + PORT);
+      let selClosed = false;
+      const quiet = new WebSocket('ws://localhost:' + PORT);
+      let quietClosed = false;
+      sel.onclose = () => { selClosed = true; };
+      quiet.onclose = () => { quietClosed = true; };
+      await new Promise(r => { sel.onopen = r; });
+      await new Promise(r => { quiet.onopen = r; });
+      const ka = setInterval(() => { if (sel.readyState === 1) sel.send(JSON.stringify({ t: 'ka' })); }, 3000);
+      await new Promise(r => setTimeout(r, 14000));   // past the 12s idle cut
+      clearInterval(ka);
+      assert(!selClosed, 'ship-select socket with keepalives survives (not reaped)');
+      assert(quietClosed, 'silent handshake-and-hold socket is reaped');
+      try { sel.close(); quiet.close(); } catch (e) { }
+    }
     console.log('OK  server: binary netcode, validation, team chat, duels, ladder, map votes all work');
   } finally {
     cleanup();

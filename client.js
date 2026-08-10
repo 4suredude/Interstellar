@@ -40,9 +40,13 @@
   };
   const keys = Object.create(null);
   let canvas = null, ctx = null, vw = 1280, vh = 720, dpr = 1;
-  // world-space camera bounds, refreshed once per drawWorld / update tick
+  // world-space camera bounds for DRAW culls, refreshed once per drawWorld
   let camL = 0, camR = 0, camT = 0, camB = 0;
-  const nearCam = (x, y) => x > camL && x < camR && y > camT && y < camB;
+  // spawn-side visibility test — computed from the camera directly rather than
+  // the draw box, because FX also spawn from network handlers between frames,
+  // when the draw box holds last frame's tighter values
+  const nearCam = (x, y) => Math.abs(x - G.cam.x) < vw / 2 + 320 &&
+    Math.abs(y - G.cam.y) < vh / 2 + 320;
   let vignette = null, bloomC = null, bloomCtx = null, filterOK = false;
 
   // ---------------------------------------------------------------- touch
@@ -1394,8 +1398,10 @@
         G.W = SIM.createWorld(opts);
         G.W.time = msg.wt || 0;   // maelstrom rocks are a function of world time
         prerenderMap();
-        for (const r of msg.roster) rosterAdd(r);
-        for (const p of msg.prizes) SIM.addPrize(G.W, p[1], p[2], p[0]);
+        // a malformed or third-party welcome must not throw mid-build and
+        // leave a half-created world with no player ship
+        if (Array.isArray(msg.roster)) for (const r of msg.roster) rosterAdd(r);
+        if (Array.isArray(msg.prizes)) for (const p of msg.prizes) SIM.addPrize(G.W, p[1], p[2], p[0]);
         // now create OUR ship with the server-issued id
         const me = SIM.makeShip(G.W, G.pendingShip, 'local', G.name, msg.hue, team);
         me.elo = G.myElo;
@@ -1738,9 +1744,6 @@
   // ---------------------------------------------------------------- update
   function update(dt) {
     G.time += dt;
-    // spawn-side camera bounds (drawWorld re-tightens them for draw culls)
-    camL = G.cam.x - vw / 2 - 260; camR = G.cam.x + vw / 2 + 260;
-    camT = G.cam.y - vh / 2 - 260; camB = G.cam.y + vh / 2 + 260;
     if (G.state === 'play' && G.paused && !G.online) return; // no pausing the zone online
     const W = G.W;
     if (!W) return;
@@ -1835,6 +1838,9 @@
         banner('ASTEROID SHOWER', 'quadrant ' + ref + ' is being raked', 2.6);
         say('Asteroid shower sweeping ' + ref + '.', '#fb6');
       } else if (EVW.type === 'marauders') {
+        // raiders only actually spawn where something authoritative runs them:
+        // don't promise pirates to a solo match world that can't create any
+        if (!G.W.opts.authority && !G.online) { G.evtSeen = EVW.idx; return; }
         banner('MARAUDER RAID', 'pirates in ' + ref + ' — bounties on their heads', 2.8);
         say('Marauders raiding ' + ref + '. Their heads are worth credits.', '#f96');
       } else {
@@ -3028,7 +3034,9 @@
       ctx.restore();
     }
     for (const p of G.parts) {
-      if (p.x < camL || p.x > camR || p.y < camT || p.y > camB) continue;
+      // margin covers the largest glow radius, so a big blast just off-screen
+      // still spills its light onto the edge instead of popping out
+      if (p.x < camL - 160 || p.x > camR + 160 || p.y < camT - 160 || p.y > camB + 160) continue;
       const f = clamp(p.life / p.max, 0, 1);
       if (p.kind === 'spark') {
         ctx.strokeStyle = 'hsla(' + p.hue + ',100%,68%,' + (f * 0.9).toFixed(3) + ')';
@@ -4108,7 +4116,10 @@
   };
   function updatePlayerInput(dt) {
     const p = G.player;
-    if (!p || p.dead || G.state !== 'play' || (G.paused && !G.online) || G.chatOpen) {
+    // pausing online doesn't stop the WORLD (the zone keeps fighting), but it
+    // must still stop YOUR SHIP — otherwise the overlay hides a ship that's
+    // still burning at full thrust into a wall
+    if (!p || p.dead || G.state !== 'play' || G.paused || G.chatOpen) {
       if (p && (G.chatOpen || G.paused)) { p.ctl.turn = 0; p.ctl.thrust = 0; p.ctl.strafe = 0; p.ctl.gun = false; p.ctl.bomb = false; }
       HOLD.l = HOLD.r = HOLD.f = HOLD.b = HOLD.sl = HOLD.sr = 0;
       return;

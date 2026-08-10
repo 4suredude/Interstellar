@@ -40,7 +40,9 @@ const MIME = {
 const SERVE_FILES = new Set([
   '/index.html', '/interstellar.html', '/client.js', '/sim.js', '/favicon.ico',
 ]);
-const servable = p => SERVE_FILES.has(p) || (p.startsWith('/assets/') && p.endsWith('.png') && p.indexOf('/', 8) === 7);
+// /assets/<name>.png only — indexOf from 8 must find NO deeper slash
+const servable = p => SERVE_FILES.has(p) ||
+  (p.startsWith('/assets/') && p.endsWith('.png') && p.indexOf('/', 8) === -1);
 const httpServer = http.createServer((req, res) => {
   // malformed percent-encoding throws synchronously; without this catch a
   // single 18-byte GET (/%) would kill the whole process
@@ -95,9 +97,17 @@ const clients = new Set();
 const byClientId = new Map();   // ship id -> client, for O(1) event crediting
 let nextClientSeq = 1;
 
+// per-IP connection ceiling: the global maxConnections alone lets one
+// address lock every other player out, or supply both ends of a farm
+const IP_MAX = parseInt(process.env.IP_MAX || '8', 10);
+const ipCount = new Map();
 function wsHandle(sock) {
+  const ip = sock.remoteAddress || '?';
+  const n = (ipCount.get(ip) || 0) + 1;
+  if (n > IP_MAX) { try { sock.destroy(); } catch (e) { } return; }
+  ipCount.set(ip, n);
   const cl = {
-    sock, buf: Buffer.alloc(0),
+    sock, ip, buf: Buffer.alloc(0),
     id: 0, name: '', ship: null,       // ship = sim ghost after join
     joined: false, lastSeen: Date.now(), connT: Date.now(),
     fireAt: Object.create(null), msgTok: 6, msgTokT: Date.now(),
@@ -209,6 +219,10 @@ function dropClient(cl) {
   if (!clients.has(cl)) return;
   clients.delete(cl);
   if (cl.id) byClientId.delete(cl.id);
+  if (cl.ip) {
+    const left = (ipCount.get(cl.ip) || 1) - 1;
+    if (left > 0) ipCount.set(cl.ip, left); else ipCount.delete(cl.ip);
+  }
   try { cl.sock.destroy(); } catch (e) { }
   if (cl.joined && cl.ship) {
     log(cl.name + ' left the zone');
@@ -594,13 +608,24 @@ function onCommand(cl, line) {
 const HAS = Object.prototype.hasOwnProperty;
 const hyp2 = (a, b) => a * a + b * b;
 const FIRE_GAP = { gun: 110, bomb: 950, burst: 750, repel: 650, blink: 3200, warp: 8000, worm: 1500 };
-// per-client token bucket: bounds chat/command/relic/prize/dmg flooding
+// per-client token bucket: bounds chat/command/relic/prize flooding
 function msgAllowed(cl) {
   const now = Date.now();
   cl.msgTok = Math.min(8, cl.msgTok + (now - cl.msgTokT) / 250);   // ~4/s, burst 8
   cl.msgTokT = now;
   if (cl.msgTok < 1) return false;
   cl.msgTok -= 1;
+  return true;
+}
+// 'dmg' is a PER-HIT report, not a user action: a Hornet lands 6+ hits/sec, so
+// the chat budget would silently eat a third of them (and with them a Reaper's
+// leech and the shooter's accuracy). Own budget, sized for sustained fire.
+function dmgAllowed(cl) {
+  const now = Date.now();
+  cl.dmgTok = Math.min(40, (cl.dmgTok == null ? 40 : cl.dmgTok) + (now - (cl.dmgTokT || now)) / 40);  // ~25/s
+  cl.dmgTokT = now;
+  if (cl.dmgTok < 1) return false;
+  cl.dmgTok -= 1;
   return true;
 }
 function onMessage(cl, msg) {
@@ -650,8 +675,12 @@ function onMessage(cl, msg) {
     case 's': {
       const s = cl.ship;
       if (!s) return;
-      s.netX = +msg.x || 0; s.netY = +msg.y || 0;
-      s.netVx = +msg.vx || 0; s.netVy = +msg.vy || 0;
+      // same clamps as the binary path — an unclamped position here would
+      // also widen the proximity checks that gate loot and damage credit
+      s.netX = SIM.clamp(+msg.x || 0, 0, SIM.WORLD);
+      s.netY = SIM.clamp(+msg.y || 0, 0, SIM.WORLD);
+      s.netVx = SIM.clamp(+msg.vx || 0, -MAX_REPORT_SPEED, MAX_REPORT_SPEED);
+      s.netVy = SIM.clamp(+msg.vy || 0, -MAX_REPORT_SPEED, MAX_REPORT_SPEED);
       s.netA = +msg.a || 0; s.netT = 0;
       s.dead = !!msg.d;
       s.netFrac = SIM.clamp(+msg.f || 0, 0, 1);
@@ -711,7 +740,7 @@ function onMessage(cl, msg) {
     case 'dmg': {
       // victim reporting a hit taken: accuracy credit + reaper leech credit
       if (!cl.joined) return;
-      if (!msgAllowed(cl)) return;
+      if (!dmgAllowed(cl)) return;
       const amount = Math.min(1500, Math.max(0, +msg.amount || 0));
       const att = W.byId.get(msg.att | 0);
       if (!att || !amount) return;
@@ -741,21 +770,35 @@ function onMessage(cl, msg) {
       // a claimed killer must be a live ship near where the victim died —
       // this blocks minting kills/score/elo for arbitrary or offline pilots
       // (full prevention needs pilot auth; owner-trusting netcode lets a
-      // victim still self-report, so cap per-pilot credit rate too)
-      const validKiller = killer && killer !== s && !killer.dead &&
+      // victim still self-report)
+      // radius must cover real projectile reach, not just dogfight range: a
+      // bomb travels ~2500px over its life and boosted gunfire ~2150px, so a
+      // tighter gate silently voids legitimate long-range kills. Dead killers
+      // count too — mutual kills are normal and the shooter may already be
+      // gone. Abuse stays bounded by the credit budget below.
+      const validKiller = killer && killer !== s &&
         hyp2((killer.remote ? killer.netX : killer.x) - s.netX,
-             (killer.remote ? killer.netY : killer.y) - s.netY) < 1600 * 1600;
-      if (validKiller) {
+             (killer.remote ? killer.netY : killer.y) - s.netY) < 2800 * 2800;
+      // ONE budget gates every scoreboard effect a self-reported death can
+      // have — live ship score, the MVP tally, and the team/round score —
+      // not just the persistent ladder. Without this a single connection can
+      // suicide-spam a team to the round goal every ~25s, forever, for the
+      // whole zone. A real pilot cannot die 20x/minute (respawn is 2.2s).
+      const dmin = Math.floor(now / 60000);
+      if (cl.credMin !== dmin) { cl.credMin = dmin; cl.credK = 0; }
+      const credOk = cl.credK < 20;
+      if (credOk) cl.credK++;
+      if (validKiller && credOk) {
         killer.kills++;
         killer.score += 10 + bounty;
         broadcast(scoreMsg(killer));
         if (!killer.bot) {
           const kcl = byClientId.get(killer.id);
-          const kmin = Math.floor(now / 60000);
           if (kcl && kcl.pilot) {
-            if (kcl.credMin !== kmin) { kcl.credMin = kmin; kcl.credK = 0; }
-            if (kcl.credK < 40) {   // ~40 credited kills/min ceiling per pilot
-              kcl.credK++;
+            // second layer: bound what one pilot can RECEIVE from many victims
+            if (kcl.credMinR !== dmin) { kcl.credMinR = dmin; kcl.credR = 0; }
+            if (kcl.credR < 40) {
+              kcl.credR++;
               sendTo(kcl, scoreMsg(killer));
               kcl.pilot.k++;
               kcl.pilot.score += 10 + bounty;
@@ -766,13 +809,14 @@ function onMessage(cl, msg) {
       broadcast(scoreMsg(s));
       sendTo(cl, scoreMsg(s));
       broadcast({ t: 'death', id: cl.id, killer: validKiller ? (msg.killer | 0) : 0, bounty }, cl);
-      tallyTeamKill(validKiller ? killer : null, s);
+      if (credOk) tallyTeamKill(validKiller ? killer : null, s);
       duelOnDeath(cl);
       pdbSave();
       log(s.name + ' killed by ' + (killer ? killer.name : '???'));
       // drop greens at the wreck
       const drops = 2 + ((Math.random() * 2) | 0);
       for (let i = 0; i < drops; i++) {
+        if (W.prizes.length >= SIM.PRIZE_CAP + 8) break;   // same ceiling the sim honors
         const px = s.netX + (Math.random() * 60 - 30), py = s.netY + (Math.random() * 60 - 30);
         if (!SIM.solidAtPx(W, px, py)) {
           const pr = SIM.addPrize(W, px, py);
@@ -928,12 +972,17 @@ setInterval(() => {
     broadcastBin(buf);
   }
   // kick silent clients (only materialize the set when someone is stale)
-  const now2 = Date.now(), cutoff = now2 - 15000, connCut = now2 - 12000;
+  const now2 = Date.now(), cutoff = now2 - 15000;
+  const idleCut = now2 - 12000, absCut = now2 - 600000;
   let stale = null;
   for (const cl of clients) {
-    // joined pilots: silent for 15s. Un-joined sockets: never sent a join
-    // within 12s of connecting — a handshake-and-hold memory-DoS vector
-    if ((cl.joined && cl.lastSeen < cutoff) || (!cl.joined && cl.connT < connCut))
+    // joined pilots: silent for 15s.
+    // un-joined sockets: SILENT for 12s (a handshake-and-hold DoS sends
+    // nothing) — must NOT be connect-time based, because a player legitimately
+    // sits on the ship-select screen with an open socket, sending keepalives,
+    // for as long as they like. An absolute 10-minute ceiling bounds the hold.
+    if ((cl.joined && cl.lastSeen < cutoff) ||
+        (!cl.joined && (cl.lastSeen < idleCut || cl.connT < absCut)))
       (stale || (stale = [])).push(cl);
   }
   if (stale) for (const cl of stale) { if (cl.joined) log('kicking silent client ' + cl.name); dropClient(cl); }

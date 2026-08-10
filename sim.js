@@ -632,7 +632,8 @@
         x = WORLD / 2 + Math.cos(a) * rr; y = WORLD / 2 + Math.sin(a) * rr;
       }
       x = clamp(x, 800, WORLD - 800); y = clamp(y, 800, WORLD - 800);
-      const p = findClearNear(W, x, y) || { x, y };
+      // seeded: every peer must place this relic at the exact same point
+      const p = findClearNear(W, x, y, rng) || { x, y };
       W.relicSlots.push({ x: p.x, y: p.y, taken: -999 });
     }
   }
@@ -806,10 +807,12 @@
     if (i >= 0) W.ships.splice(i, 1);
     W.byId.delete(s.id);
   }
-  function findClearNear(W, x, y) {
+  // rngf: pass W.rng when the RESULT must be identical on every peer (world
+  // generation). Unseeded Math.random is fine for gameplay-time placement.
+  function findClearNear(W, x, y, rngf) {
     for (let rad = 0; rad < 320; rad += 26) {
       for (let k = 0; k < 8; k++) {
-        const a = rand(0, TAU);
+        const a = (rngf ? rngf() : Math.random()) * TAU;
         const px = clamp(x + Math.cos(a) * rad, TILE * 3, WORLD - TILE * 3);
         const py = clamp(y + Math.sin(a) * rad, TILE * 3, WORLD - TILE * 3);
         if (!rectSolid(W, px - 20, py - 20, 40, 40)) return { x: px, y: py };
