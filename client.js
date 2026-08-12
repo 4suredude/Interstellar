@@ -33,6 +33,7 @@
     banner: null, lastKillT: -99, combo: 0, duelW: 0, duelL: 0,
     demoT: 0, demoShip: null,
     mapChunks: null, radarC: null,
+    qualLock: false,    // dev/perf.js pins the tier so A/B runs are comparable
     // net
     net: null, netErr: '', myId: 0, name: '', nameStr: '', stateTick: 0, kaTimer: 0,
     chatOpen: false, chatStr: '',
@@ -49,7 +50,7 @@
   // when the draw box holds last frame's tighter values
   const nearCam = (x, y) => Math.abs(x - G.cam.x) < vw / 2 + 320 &&
     Math.abs(y - G.cam.y) < vh / 2 + 320;
-  let vignette = null, bloomC = null, bloomCtx = null, filterOK = false;
+  let vignette = null, bloomC = null, bloomCtx = null;
 
   // ---------------------------------------------------------------- touch
   // Mobile is a first-class pilot seat: virtual stick (point-to-fly) on the
@@ -1718,8 +1719,13 @@
   }
 
   // ---------------------------------------------------------------- world setup
-  function newSoloWorld() {
-    G.W = SIM.createWorld({ seed: (Math.random() * 1e9) | 0, spawnPrizes: true, zoneWorld: true, authority: true });
+  function newSoloWorld(seed) {
+    // dev/perf.js pins the seed so an A/B run compares the same terrain,
+    // the same neighbours and the same scenery rather than two dice rolls
+    G.W = SIM.createWorld({
+      seed: seed == null ? (Math.random() * 1e9) | 0 : seed | 0,
+      spawnPrizes: true, zoneWorld: true, authority: true,
+    });
     // squad members respawn in their fortress keep, under the mothership;
     // freelancers respawn in the contested mid-sector
     G.W.opts.spawnPoint = sh => {
@@ -1774,6 +1780,14 @@
     // tile field live, drawing only its local window each frame
   }
 
+  // Baking is a couple of milliseconds; crossing a chunk boundary diagonally
+  // used to want several at once and spiked the frame (p95 was double p50).
+  // Now each frame bakes at most BAKE_PER_FRAME, and spends anything left
+  // over on the ring just outside the view — so by the time you fly into a
+  // chunk it is already drawn, and the frame time stays flat.
+  const BAKE_PER_FRAME = 2;
+  let bakeBudget = 0;
+
   function mapChunk(chx, chy) {
     const key = chy * NCHUNK + chx;
     let ch = G.mapChunks.get(key);
@@ -1783,6 +1797,10 @@
       G.mapChunks.delete(key); G.mapChunks.set(key, ch);
       return ch;
     }
+    // out of budget: skip it this frame rather than stall. undefined is
+    // falsy, so the draw simply does not happen until the bake lands.
+    if (bakeBudget <= 0) return undefined;
+    bakeBudget--;
     ch = bakeChunk(chx, chy);
     G.mapChunks.set(key, ch);
     if (G.mapChunks.size > CHUNK_CACHE) {
@@ -1790,6 +1808,19 @@
       G.mapChunks.delete(oldest);
     }
     return ch;
+  }
+
+  // spend leftover budget one ring beyond the view, nearest edge first
+  function prefetchChunks(x0, y0, x1, y1) {
+    for (let cy = y0 - 1; cy <= y1 + 1 && bakeBudget > 0; cy++) {
+      if (cy < 0 || cy >= NCHUNK) continue;
+      for (let cx = x0 - 1; cx <= x1 + 1 && bakeBudget > 0; cx++) {
+        if (cx < 0 || cx >= NCHUNK) continue;
+        if (cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1) continue;  // already on screen
+        if (G.mapChunks.has(cy * NCHUNK + cx)) continue;
+        mapChunk(cx, cy);
+      }
+    }
   }
 
   function bakeChunk(chx, chy) {
@@ -2154,7 +2185,12 @@
   let dustGroups = [[], [], [], []];
   const nebulae = [];
   const bgObjs = [];
-  const dust = [];
+  // The scenery is SOFT — gradient nebulae, hazed planets, a blurred galaxy.
+  // Rendering it at gameplay resolution was costing more per frame than the
+  // entire game did (9.3 ms vs 1.2 ms measured). It now composites into a
+  // half-resolution buffer that upscales in one blit; stars and the ships
+  // stay pin-sharp on top, where sharpness is actually visible.
+  let bgLo = null, bgLoCtx = null, bgLoScale = 0.5, skyC = null;
 
   function makePlanet(rad, hue, style, rng) {
     const doc = GLOBAL.document;
@@ -2212,14 +2248,27 @@
         y += bh + rad * rng() * 0.06;
       }
     }
-    // spherical shading, sun from the top-left like everything else
+    // spherical shading, sun from the top-left like everything else. The
+    // terminator used to crush almost to black, and the atmospheric haze
+    // pass then darkened it again — together they turned these worlds into
+    // grey smudges. Keep the falloff readable and let the albedo survive.
     const sg = g.createRadialGradient(cx - rad * 0.45, cy - rad * 0.45, rad * 0.1, cx, cy, rad * 1.02);
-    sg.addColorStop(0, 'rgba(255,255,255,0.28)');
+    sg.addColorStop(0, 'rgba(255,255,255,0.30)');
     sg.addColorStop(0.5, 'rgba(0,0,0,0)');
-    sg.addColorStop(0.82, 'rgba(3,5,14,0.55)');
-    sg.addColorStop(1, 'rgba(1,2,8,0.96)');
+    sg.addColorStop(0.82, 'rgba(3,5,14,0.40)');
+    sg.addColorStop(1, 'rgba(1,2,8,0.86)');
     g.fillStyle = sg;
     g.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
+    // cold rim light along the shadowed limb — the cue that reads "sphere"
+    // rather than "disc", and it costs nothing at draw time
+    g.globalCompositeOperation = 'lighter';
+    const rg = g.createRadialGradient(cx + rad * 0.36, cy + rad * 0.38, rad * 0.55, cx + rad * 0.2, cy + rad * 0.22, rad * 1.04);
+    rg.addColorStop(0, 'rgba(120,170,255,0)');
+    rg.addColorStop(0.86, 'rgba(120,170,255,0.05)');
+    rg.addColorStop(1, 'rgba(150,195,255,0.34)');
+    g.fillStyle = rg;
+    g.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
+    g.globalCompositeOperation = 'source-over';
     g.restore();
     ring(true);                                      // ring passes in front
     return c;
@@ -2352,11 +2401,9 @@
           x: rand(0, 4000), y: rand(0, 4000), z, size: size * rand(0.6, 1.3),
           tw: rand(0, TAU), tint: tints[irand(tints.length)],
         });
-    dust.length = 0;
     dustGroups = [[], [], [], []];
     for (let i = 0; i < 260; i++) {
       const d = { x: rand(0, 4000), y: rand(0, 4000), a: rand(0.15, 0.5) };
-      dust.push(d);
       dustGroups[Math.min(3, (((d.a - 0.15) / 0.35) * 4) | 0)].push(d);
     }
     nebulae.length = 0;
@@ -2382,9 +2429,11 @@
     bgObjs.length = 0;
     const rng = SIM.mulberry32((Math.random() * 1e9) | 0);
     const planetHues = [rand(10, 40), rand(170, 220), rand(270, 330)];
-    bgObjs.push({ c: hazify(makePlanet(88, planetHues[0], 'ringed', rng), 1.6, 0.4), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.07, a: 0.55, add: false });
-    bgObjs.push({ c: hazify(makePlanet(66, planetHues[1], 'gas', rng), 1.6, 0.42), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.055, a: 0.5, add: false });
-    bgObjs.push({ c: hazify(makePlanet(42, planetHues[2], 'rock', rng), 1.4, 0.45), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.045, a: 0.45, add: false });
+    // the haze pass sells distance, but at 0.4 it was stacking with the
+    // terminator and the frame's depth wash into an unreadable smudge
+    bgObjs.push({ c: hazify(makePlanet(88, planetHues[0], 'ringed', rng), 1.6, 0.16), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.07, a: 0.70, add: false });
+    bgObjs.push({ c: hazify(makePlanet(66, planetHues[1], 'gas', rng), 1.6, 0.18), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.055, a: 0.66, add: false });
+    bgObjs.push({ c: hazify(makePlanet(42, planetHues[2], 'rock', rng), 1.4, 0.20), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.045, a: 0.60, add: false });
     bgObjs.push({ c: hazify(makeBlackHole(120), 1, 0.22), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.06, a: 0.65, add: true, rotV: 0.02 });
     bgObjs.push({ c: makeGalaxy(190, rng), x: rand(0, WORLD), y: rand(0, WORLD), z: 0.05, a: 0.7, add: true });
     const flareTints = ['200,220,255', '255,230,200', '255,210,225'];
@@ -2397,52 +2446,64 @@
   }
 
   function drawBackdrop() {
-    // near-black space, like the original — the nebulae are a whisper, not a wash
-    const sky = ctx.createRadialGradient(vw / 2, vh / 2, 0, vw / 2, vh / 2, Math.max(vw, vh) * 0.75);
-    sky.addColorStop(0, '#070a14');
-    sky.addColorStop(1, '#020308');
-    ctx.fillStyle = sky;
-    ctx.fillRect(0, 0, vw, vh);
+    // ---- soft layers, rendered at half resolution and upscaled once ----
+    if (!bgLoCtx) return;
+    const lo = bgLoCtx, S = bgLoScale;
+    const lw = bgLo.width, lh = bgLo.height;
+    // near-black space, like the original — the nebulae are a whisper, not a
+    // wash. The sky is a static gradient, so it is baked once at resize
+    // instead of being re-interpolated across a million pixels every frame.
+    lo.drawImage(skyC, 0, 0);
     // farthest layer: unresolved star dust — batched into 4 alpha groups so
     // globalAlpha changes 4 times per frame instead of 260
-    ctx.fillStyle = 'rgba(200,215,255,0.5)';
+    lo.fillStyle = 'rgba(200,215,255,0.5)';
     for (let gI = 0; gI < dustGroups.length; gI++) {
-      ctx.globalAlpha = 0.2 + gI * 0.1;
+      lo.globalAlpha = 0.2 + gI * 0.1;
       for (const d of dustGroups[gI]) {
         const sx = ((d.x - G.cam.x * 0.045) % (vw + 40) + vw + 40) % (vw + 40) - 20;
         const sy = ((d.y - G.cam.y * 0.045) % (vh + 40) + vh + 40) % (vh + 40) - 20;
-        ctx.fillRect(sx, sy, 1, 1);
+        lo.fillRect(sx * S, sy * S, 1, 1);
       }
     }
-    ctx.globalAlpha = 1;
+    lo.globalAlpha = 1;
     // set pieces: galaxy, planets, black hole, flare stars (parallax-wrapped)
     for (const o of bgObjs) {
       const w = o.c.width, h = o.c.height;
       const sx = ((o.x - G.cam.x * o.z) % (vw + w) + vw + w) % (vw + w) - w;
       const sy = ((o.y - G.cam.y * o.z) % (vh + h) + vh + h) % (vh + h) - h;
-      ctx.globalCompositeOperation = o.add ? 'lighter' : 'source-over';
-      ctx.globalAlpha = o.a * (o.tw == null ? 1 : 0.7 + 0.3 * Math.sin(G.time * 1.3 + o.tw));
+      // the wrap parks most set pieces off-screen most of the time; skipping
+      // those costs one compare and saves a full sprite composite
+      if (sx > vw || sy > vh || sx + w < 0 || sy + h < 0) continue;
+      lo.globalCompositeOperation = o.add ? 'lighter' : 'source-over';
+      lo.globalAlpha = o.a * (o.tw == null ? 1 : 0.7 + 0.3 * Math.sin(G.time * 1.3 + o.tw));
       if (o.rotV) {
-        ctx.save();
-        ctx.translate(sx + w / 2, sy + h / 2);
-        ctx.rotate(G.time * o.rotV);
-        ctx.drawImage(o.c, -w / 2, -h / 2);
-        ctx.restore();
+        lo.save();
+        lo.translate((sx + w / 2) * S, (sy + h / 2) * S);
+        lo.rotate(G.time * o.rotV);
+        lo.drawImage(o.c, -w / 2 * S, -h / 2 * S, w * S, h * S);
+        lo.restore();
       } else {
-        ctx.drawImage(o.c, sx, sy);
+        lo.drawImage(o.c, sx * S, sy * S, w * S, h * S);
       }
     }
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = 'lighter';
+    lo.globalAlpha = 1;
+    lo.globalCompositeOperation = 'lighter';
     for (const nb of nebulae) {
       const px = nb.x - G.cam.x * 0.14, py = nb.y - G.cam.y * 0.14;
       const wx = ((px % (vw + 1100)) + vw + 1100) % (vw + 1100) - 550;
       const wy = ((py % (vh + 1100)) + vh + 1100) % (vh + 1100) - 550;
-      ctx.globalAlpha = nb.a * 0.5;
-      ctx.drawImage(nb.c, wx - nb.r, wy - nb.r, nb.r * 2, nb.r * 2);
+      // each nebula blends an area several times the screen; culling the ones
+      // the wrap has pushed out of view is the single biggest saving here
+      if (wx - nb.r > vw || wy - nb.r > vh || wx + nb.r < 0 || wy + nb.r < 0) continue;
+      lo.globalAlpha = nb.a * 0.5;
+      lo.drawImage(nb.c, (wx - nb.r) * S, (wy - nb.r) * S, nb.r * 2 * S, nb.r * 2 * S);
     }
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = 'source-over';
+    lo.globalAlpha = 1;
+    lo.globalCompositeOperation = 'source-over';
+    // one upscale carries the whole scenery layer to the screen
+    ctx.drawImage(bgLo, 0, 0, lw, lh, 0, 0, vw, vh);
+
+    // ---- sharp layers, drawn at full resolution on top ----
     // occasional shooting star
     if (G.shoot) {
       const s = G.shoot;
@@ -2493,6 +2554,9 @@
   // The result reads like pre-rendered 3D models, with zero image assets.
   const ROT_FRAMES = 36;
   const atlasCache = new Map();
+  // 12 hulls x a handful of faction colours fits comfortably; the cap is a
+  // backstop so an unusual zone cannot grow the cache forever
+  const ATLAS_CACHE = 48;
 
   function tracePolyOn(g, pts, r) {
     g.beginPath();
@@ -2616,13 +2680,20 @@
       g.fillStyle = gray(0.95);
       g.fill();
     }
-    // recessed engine nozzles
+    // Recessed engine nozzles, clipped to the hull. Fighters carry their
+    // engines well inboard so this never mattered, but capitals mount them
+    // at -0.97 of the shape — the nozzle discs spilled past the transom and
+    // baked as free-floating grey blobs trailing off the stern.
+    g.save();
+    tracePolyOn(g, t.shape, r);
+    g.clip();
     for (const en of t.engines) {
       g.beginPath();
       g.arc(en[0] * r, en[1] * r, r * 0.16, 0, TAU);
       g.fillStyle = gray(0.14);
       g.fill();
     }
+    g.restore();
     g.restore();
   }
 
@@ -2694,13 +2765,19 @@
       g.ellipse(px * r, py * r, rx * r, ry * r, 0, 0, TAU);
       g.fill();
     }
-    // nozzles
+    // Nozzles, clipped to the hull. lightCompose takes its output alpha from
+    // THIS pass, so anything painted outside the silhouette here becomes a
+    // lit, visible blob — which is what capitals were trailing off the stern.
+    g.save();
+    tracePolyOn(g, t.shape, r);
+    g.clip();
     for (const en of t.engines) {
       g.beginPath();
       g.arc(en[0] * r, en[1] * r, r * 0.16, 0, TAU);
       g.fillStyle = '#14161c';
       g.fill();
     }
+    g.restore();
     // nav lights: port red, starboard green
     let maxY = t.shape[0], minY = t.shape[0];
     for (const p of t.shape) { if (p[1] > maxY[1]) maxY = p; if (p[1] < minY[1]) minY = p; }
@@ -2751,9 +2828,16 @@
 
   function shipAtlas(typeKey, hue, scaleMul) {
     scaleMul = scaleMul || 1;
-    const key = typeKey + ':' + Math.round(hue) + ':' + scaleMul;
+    // Quantize the hue: a 36-frame atlas costs ~1.3 MB and a per-pixel
+    // lighting bake, and nobody can tell 214 degrees from 216. Without this,
+    // every distinct pilot colour in a long session minted its own atlas and
+    // the cache grew without bound.
+    const key = typeKey + ':' + (Math.round(hue / 6) * 6) + ':' + scaleMul;
     let cached = atlasCache.get(key);
-    if (cached) return cached;
+    if (cached) {
+      atlasCache.delete(key); atlasCache.set(key, cached);   // LRU touch
+      return cached;
+    }
     const t = SHIP_TYPES[typeKey];
     const r0 = t.radius * 1.5 * scaleMul;
     const cell = Math.ceil(r0 * 2 * 1.4) + 12;
@@ -2788,6 +2872,7 @@
     }
     cached = { c: atlas, cell };
     atlasCache.set(key, cached);
+    if (atlasCache.size > ATLAS_CACHE) atlasCache.delete(atlasCache.keys().next().value);
     return cached;
   }
 
@@ -2847,11 +2932,23 @@
     drawGlow(0, 0, c.r * 1.9, hue, c.boss ? 0.24 : 0.18);
     ctx.globalCompositeOperation = 'source-over';
     ctx.rotate(c.angle);
-    // engine wash out the back
+    // Engine wash: a PLUME, not a blob. A round mid-alpha orange glow added
+    // onto black just reads as brown smudge — thrust needs to be elongated
+    // aft and hot enough in the middle to look like combustion, so each
+    // nozzle gets a stretched outer flame with a near-white core inside it.
     ctx.globalCompositeOperation = 'lighter';
-    const pu = 0.7 + 0.3 * Math.sin(G.time * 2.4 + c.id);
-    for (const en of t.engines)
-      drawGlow(en[0] * c.r, en[1] * c.r, c.r * 0.30 * pu, c.boss ? 12 : 20, 0.5);
+    const pu = 0.78 + 0.22 * Math.sin(G.time * 2.4 + c.id);
+    const flame = glowSprite(c.boss ? 14 : 26), core = glowSprite(48);
+    for (const en of t.engines) {
+      const ex = en[0] * c.r, ey = en[1] * c.r;
+      const fw = c.r * 0.78 * pu, fh = c.r * 0.17;
+      ctx.globalAlpha = 0.7;
+      ctx.drawImage(flame, ex - fw * 0.88, ey - fh / 2, fw, fh);
+      const cw = fw * 0.44, chh = fh * 0.62;
+      ctx.globalAlpha = 0.95;
+      ctx.drawImage(core, ex - cw * 0.82, ey - chh / 2, cw, chh);
+    }
+    ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
     ctx.drawImage(spr.c, -drawn / 2, -drawn / 2, drawn, drawn);
     // hit flash
@@ -3022,6 +3119,7 @@
 
     // draw only the chunks the camera can see (baked on demand, LRU cached)
     {
+      bakeBudget = BAKE_PER_FRAME;
       const x0 = Math.max(0, ((G.cam.x - vw / 2) / CHUNK_PX) | 0);
       const y0 = Math.max(0, ((G.cam.y - vh / 2) / CHUNK_PX) | 0);
       const x1 = Math.min(NCHUNK - 1, ((G.cam.x + vw / 2) / CHUNK_PX) | 0);
@@ -3031,6 +3129,7 @@
           const im = mapChunk(cx, cy);
           if (im) ctx.drawImage(im, cx * CHUNK_PX, cy * CHUNK_PX);
         }
+      if (bakeBudget > 0) prefetchChunks(x0, y0, x1, y1);
     }
 
     camL = G.cam.x - vw / 2 - 90; camR = G.cam.x + vw / 2 + 90;
@@ -3467,25 +3566,37 @@
   function drawHUD() {
     const p = G.player;
     if (!p) return;
-    const narrow = T.active && vw < 640;   // phone layout
+    // Phone layout is about SPACE, not about whether a finger has landed yet.
+    // Keying it on T.active meant a phone rendered the full desktop HUD until
+    // the first touch — chip row clipped off both edges, standings sitting on
+    // top of the energy bar — and a small desktop window never recovered at
+    // all. Width decides the layout; touch only decides the controls.
+    const narrow = vw < 640;
     drawContacts();
 
-    // MMO layer: credits + the upgrade bay
-    if (G.mmo) {
-      txt('¢ ' + G.credits + '  ·  ◆ ' + G.relics + '  ·  U bay · J board', 20, narrow ? 104 : 126, narrow ? 10 : 12, '#fd8', 'left', 700);
-      drawContracts(narrow);
-      if (G.upgOpen) drawUpgradeBay();
-    }
-
     // BOSS ENGAGEMENT: the nearest hostile capital in range takes over the
-    // top of the screen with a proper health bar
+    // top of the screen with a proper health bar. Found first, because on a
+    // phone its bar lands exactly where the credits and contracts go — that
+    // collision is why the salvage line was hiding behind a boss hull bar.
+    let boss = null;
     if (G.W.capitals && !p.dead) {
-      let boss = null, bd = 2600;
+      let bd = 2600;
       for (const c of G.W.capitals) {
         if (!c.boss || c.dead) continue;
         const d = Math.hypot(c.x - p.x, c.y - p.y);
         if (d < bd) { bd = d; boss = c; }
       }
+    }
+    const bossShift = narrow && boss ? 36 : 0;
+
+    // MMO layer: credits + the upgrade bay
+    if (G.mmo) {
+      txt('¢ ' + G.credits + '  ·  ◆ ' + G.relics + '  ·  U bay · J board', 20, (narrow ? 104 : 126) + bossShift, narrow ? 10 : 12, '#fd8', 'left', 700);
+      drawContracts(narrow, bossShift);
+      if (G.upgOpen) drawUpgradeBay();
+    }
+
+    {
       if (boss) {
         const bw = Math.min(560, vw - 60), bx = vw / 2 - bw / 2, by = narrow ? 92 : 44;
         const frac = clamp(boss.hp / boss.maxHp, 0, 1);
@@ -3627,8 +3738,8 @@
       }
     }
 
-    // leaderboard (hidden on touch layouts — the radar takes its corner)
-    if (!T.active) {
+    // leaderboard (hidden on the phone layout — the radar takes its corner)
+    if (!narrow) {
       // refreshed at 4Hz — a fresh sort every frame is pure churn
       if (!G.board || G.time - (G.boardT || 0) > 0.25) {
         G.boardT = G.time;
@@ -3646,9 +3757,9 @@
       });
     }
 
-    if (T.active) {
+    if (narrow) {
       const R = Math.min(150, vw * 0.28);
-      drawRadar(vw - R - 12, narrow ? 124 : 84, R);
+      drawRadar(vw - R - 12, 124, R);
     } else {
       const R = 172;
       drawRadar(vw - R - 12, vh - R - 12, R);
@@ -3921,11 +4032,11 @@
   }
 
   // the contract board: always-visible one-liners, or a full panel on J
-  function drawContracts(narrow) {
+  function drawContracts(narrow, shift) {
     if (!G.contracts || !G.contracts.length) return;
     const full = G.boardOpen;
     const x = 14, w = full ? 320 : 250;
-    let y = (narrow ? 118 : 142);
+    let y = (narrow ? 118 : 142) + (shift || 0);
     if (full) {
       panel(x - 4, y - 4, w + 8, 26 + G.contracts.length * 36);
       txt('CONTRACT BOARD', x + 6, y + 13, 12, '#c8ecff', 'left', 800);
@@ -4210,7 +4321,10 @@
     ctx.fillStyle = 'rgba(3,5,12,0.22)';
     ctx.fillRect(0, 0, vw, vh);
     if (G.W && G.mapChunks) drawWorld();
-    if (G.qual > 0) applyBloom();
+    // bloom is the single most expensive pass in the frame (measured ~45% of
+    // it at 1600x900), so the FIRST quality step-down sheds it — that buys
+    // far more than dropping resolution alone on a struggling device
+    if (G.qual > 1) applyBloom();
     if (vignette) ctx.drawImage(vignette, 0, 0, vw, vh);
     if (G.state === 'title') drawTitle();
     else if (G.state === 'select') drawSelect();
@@ -4276,9 +4390,16 @@
     { k: 'hold', n: 'Conquest', d: n => 'help take ' + n + ' quadrant' + (n > 1 ? 's' : ''), min: 1, max: 2, pay: 200 },
     { k: 'boss', n: 'Leviathan Hunt', d: n => 'destroy ' + n + ' capital ship' + (n > 1 ? 's' : ''), min: 1, max: 2, pay: 700 },
   ];
-  function rollContract() {
+  // `avoid` keeps the board varied: rolling uniformly meant a pilot regularly
+  // held three Recoveries at once, which reads as a broken board and collapses
+  // three objectives into one activity.
+  function rollContract(avoid) {
     // squadless pilots can't take ground, so never hand them a Conquest
-    const pool = CONTRACTS.filter(c => c.k !== 'hold' || G.zoneTeam);
+    let pool = CONTRACTS.filter(c => c.k !== 'hold' || G.zoneTeam);
+    if (avoid && avoid.length) {
+      const fresh = pool.filter(c => avoid.indexOf(c.k) < 0);
+      if (fresh.length) pool = fresh;
+    }
     const c = pool[irand(pool.length)];
     const need = c.min + irand(c.max - c.min + 1);
     // a fresh survey starts from a blank chart, or an explorer who has already
@@ -4286,10 +4407,12 @@
     if (c.k === 'survey') G.charted = [];
     return { k: c.k, need, have: 0, pay: c.pay * need };
   }
+  const heldKinds = skip => G.contracts
+    .filter((ct, i) => ct && i !== skip).map(ct => ct.k);
   function contractsInit() {
     if (!Array.isArray(G.contracts)) G.contracts = [];
-    while (G.contracts.length < 3) G.contracts.push(rollContract());
-    G.contracts.length = 3;
+    G.contracts = G.contracts.filter(Boolean).slice(0, 3);
+    while (G.contracts.length < 3) G.contracts.push(rollContract(heldKinds(-1)));
   }
   const contractDef = k => CONTRACTS.find(c => c.k === k) || CONTRACTS[0];
   function contractProgress(kind, n) {
@@ -4306,7 +4429,7 @@
         banner('CONTRACT COMPLETE', def.n + ' — +' + ct.pay + ' credits', 2.6);
         say('Contract complete: ' + def.n + ' · +' + ct.pay + ' credits', '#8f8');
         sndPrize();
-        G.contracts[i] = rollContract();
+        G.contracts[i] = rollContract(heldKinds(i));
       }
     }
     if (changed) saveMMO();
@@ -4830,7 +4953,27 @@
     bloomC = doc.createElement('canvas');
     bloomC.width = Math.max(2, vw >> 2); bloomC.height = Math.max(2, vh >> 2);
     bloomCtx = bloomC.getContext('2d');
-    try { filterOK = typeof ctx.filter === 'string'; } catch (e) { filterOK = false; }
+    // scenery buffer: half resolution normally, coarser in lean mode. The
+    // content is soft enough that the upscale is invisible, and it is drawn
+    // in CSS pixels — so on a 2x display it is a quarter of the fill the
+    // backdrop used to cost, before the half-res saving on top.
+    bgLoScale = G.qual > 0 ? 0.5 : 0.4;
+    bgLo = doc.createElement('canvas');
+    bgLo.width = Math.max(2, Math.ceil(vw * bgLoScale));
+    bgLo.height = Math.max(2, Math.ceil(vh * bgLoScale));
+    bgLoCtx = bgLo.getContext('2d');
+    // the sky is a fixed radial gradient: bake it once rather than
+    // re-interpolating it per pixel every frame
+    skyC = doc.createElement('canvas');
+    skyC.width = bgLo.width; skyC.height = bgLo.height;
+    const sg = skyC.getContext('2d');
+    const sky = sg.createRadialGradient(
+      skyC.width / 2, skyC.height / 2, 0,
+      skyC.width / 2, skyC.height / 2, Math.max(skyC.width, skyC.height) * 0.75);
+    sky.addColorStop(0, '#070a14');
+    sky.addColorStop(1, '#020308');
+    sg.fillStyle = sky;
+    sg.fillRect(0, 0, skyC.width, skyC.height);
   }
 
   let lastT = 0, acc = 0, qualT = 0;
@@ -4846,7 +4989,7 @@
       qualT += dt;
       if (qualT > 2.5) {
         qualT = 0;
-        if (G.fpsEMA < 42 && G.qual > 0) {
+        if (G.fpsEMA < 42 && G.qual > 0 && !G.qualLock) {
           G.qual--;
           resize();
           say('Performance mode: graphics scaled to keep the fight smooth', '#8ac');
@@ -4970,7 +5113,16 @@
     }
     return { ok: bad.length === 0, bad, fire, fireHeld: T.fire, bombHeld: T.bomb, vw, vh };
   }
-  GLOBAL.__interstellar = { G, SIM, boot, startSolo, update, render, keys, handleNet, netConnect, STEP, MUS, musTest, updatePlayerInput, Ttest };
+  GLOBAL.__interstellar = {
+    G, SIM, boot, startSolo, update, render, keys, handleNet, netConnect, STEP, MUS,
+    musTest, updatePlayerInput, Ttest, newSoloWorld,
+    // dev/perf.js times these individually to attribute frame cost by phase
+    phases: { backdrop: drawBackdrop, world: drawWorld, bloom: applyBloom, hud: drawHUD },
+    // dev/visual.js inspects baked pixels — a silhouette regression is
+    // invisible to a headless sim test but obvious in the atlas itself
+    bake: { capitalSprite, shipAtlas },
+    contracts: { roll: rollContract, init: contractsInit },
+  };
 
   if (GLOBAL.document && GLOBAL.document.getElementById) boot();
 })();

@@ -193,6 +193,8 @@ as humans join and rejoin as the zone empties.
 ## Play solo (no install)
 
 Open `index.html` in any modern browser, pick a mode and a ship, and fly.
+![Phone layout](assets/mobile.png)
+
 Works on **phones and tablets** too: a virtual stick appears under your left
 thumb (point it where you want to fly), weapon buttons sit under your right,
 and every menu is tappable — the hosted zone is fully playable from mobile.
@@ -280,7 +282,7 @@ A new generation of hulls joins the fleet — each with a mechanic all its own:
 
 ## The look
 
-![Online multiplayer](assets/online.png)
+![Capital ship engagement](assets/boss.png)
 
 - Ships are **solid, metallic, shaded craft** rendered through **36-frame
   rotation sprite atlases with fixed top-left lighting** — a crisp
@@ -334,6 +336,8 @@ A new generation of hulls joins the fleet — each with a mechanic all its own:
 
 ## Controls
 
+![Controls](assets/controls.png)
+
 | Key | Action |
 | --- | --- |
 | `W` / `↑` | Thrust |
@@ -368,10 +372,43 @@ layout is saved in the browser.
 | `client.js` | Renderer, input, menus, audio, netcode client. |
 | `server.js` | Zero-dependency zone server: static hosting + hand-rolled RFC 6455 WebSocket endpoint + authoritative bots/prizes + relay. |
 | `dev/smoke.js` | Headless test: 90 s sim combat, stub-DOM client run, and a real server with two WebSocket clients exercising the whole protocol. |
+| `dev/visual.js` | Pixel assertions the sim suite structurally cannot make — bakes the real sprites in Chromium and checks hull silhouettes, the contract board, and that a frame actually paints. |
+| `dev/perf.js` | Frame-rate harness. Drives real scenes on a **pinned world seed** and measures presented frames, so an A/B compares the same terrain rather than two dice rolls. |
+| `dev/shots.js` | Screenshot capture. Every image in this README is a real frame of the real client — no mockups, no compositing. |
 
 ```sh
-node dev/smoke.js         # run all three test layers
+node dev/smoke.js         # sim, client and server layers
+node dev/visual.js        # pixel-level art regressions
+node dev/perf.js          # fps per scene, desktop and phone viewports
+node dev/shots.js         # regenerate assets/*.png
+node dev/build.js         # bundle everything into interstellar.html
 ```
+
+Note that Canvas2D defers rasterization, so timing `drawImage` calls in a
+loop measures command *recording*, not pixels — the numbers look great and
+mean nothing. `dev/perf.js` unthrottles the compositor and counts presented
+frames instead, which is the one metric that cannot lie.
+
+### Performance
+
+The scenery is soft — gradient nebulae, hazed planets, a blurred galaxy —
+and it was being rendered at full gameplay resolution, costing more per
+frame than the entire game did (9.3 ms against 1.2 ms for everything that
+moves). It now composites into a half-resolution buffer that upscales in one
+blit, with the static sky gradient baked once at resize and off-screen set
+pieces culled; stars and ships stay pin-sharp on top, where sharpness is
+actually visible. Sprite atlases quantize their hue and evict LRU, terrain
+chunks bake on a per-frame budget with a prefetch ring, and bloom — the
+single most expensive pass, ~45% of the frame — is shed by the *first*
+quality step-down rather than the second.
+
+Measured on one pinned world, presented frames, before → after:
+
+| Scene | 1600×900 | 390×844 |
+| --- | --- | --- |
+| Open frontier | 45.9 → **50.8** fps | 95.3 → **141.9** fps |
+| 14-ship brawl | 38.3 → **56.4** fps | 88.6 → **128.9** fps |
+| Under a carrier | 34.8 → **46.5** fps | 107.4 → **146.2** fps |
 
 ## Roadmap ideas
 
