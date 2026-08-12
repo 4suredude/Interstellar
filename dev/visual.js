@@ -23,10 +23,13 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 let failures = 0;
 function assert(cond, msg) {
-  if (cond) return;
+  if (cond) return true;
   failures++;
   console.log('FAIL  ' + msg);
+  return false;
 }
+// a block's OK line only prints if the block's own asserts all held
+function okIf(since, msg) { if (failures === since) console.log('OK  ' + msg); }
 
 async function main() {
   const server = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
@@ -90,13 +93,32 @@ async function main() {
     // px and never reaches past 0.7 of unit radius. Real spill is an order of
     // magnitude bigger AND lands out past the transom near 1.0+, so the two
     // signals together separate the cases with room to spare.
+    let mark = failures;
     for (const s of spill) {
       assert(s.stray < 400 && s.worst < 0.9,
         s.kind + ': ' + s.stray + ' lit pixels outside the hull, reaching ' +
         s.worst + ' of unit radius — sprite bake is spilling past the silhouette');
     }
-    console.log('OK  capital silhouettes clean: ' +
+    okIf(mark, 'capital silhouettes clean: ' +
       spill.map(s => s.kind + ' ' + s.stray + 'px@' + s.worst).join(', '));
+
+    // ---- a capital being drawn cannot be evicted by fighter churn ----
+    const evict = await page.evaluate(() => {
+      const A = window.__interstellar;
+      const before = A.bake.capitalSprite('dreadnought', 96);
+      // simulate a hue-diverse zone: far more fighter atlases than the cache
+      // holds, while the boss keeps being fetched the way drawCapital does
+      for (let i = 0; i < 80; i++) {
+        A.bake.shipAtlas('corsair', (i * 7) % 360, 1);
+        A.bake.capitalSprite('dreadnought', 96);
+      }
+      const after = A.bake.capitalSprite('dreadnought', 96);
+      return { survived: before === after };
+    });
+    mark = failures;
+    assert(evict.survived,
+      'a capital sprite fetched every frame was evicted by fighter atlas churn and re-baked');
+    okIf(mark, 'hot capital sprites survive atlas cache churn');
 
     // ---- the contract board offers three DIFFERENT things to do ----
     const board = await page.evaluate(() => {
@@ -111,10 +133,11 @@ async function main() {
       }
       return { dupes, sample: A.G.contracts.map(c => c.k) };
     });
+    mark = failures;
     assert(board.dupes.length === 0,
       'contract board handed out duplicates in ' + board.dupes.length +
       '/60 rolls (e.g. ' + board.dupes[0] + ')');
-    console.log('OK  contract board always offers three distinct objectives');
+    okIf(mark, 'contract board always offers three distinct objectives');
 
     // ---- the scenery buffer exists and the frame paints something ----
     const frame = await page.evaluate(() => {
@@ -130,9 +153,10 @@ async function main() {
       for (let i = 0; i < d.length; i += 4 * 97) if (d[i] + d[i + 1] + d[i + 2] > 24) lit++;
       return { lit, sampled: Math.floor(d.length / (4 * 97)) };
     });
+    mark = failures;
     assert(frame.lit > frame.sampled * 0.02,
       'rendered frame is nearly black (' + frame.lit + '/' + frame.sampled + ' lit samples)');
-    console.log('OK  a rendered frame has a visible scene in it');
+    okIf(mark, 'a rendered frame has a visible scene in it');
 
     assert(errs.length === 0, 'page errors: ' + errs.slice(0, 3).join(' | '));
   } finally {

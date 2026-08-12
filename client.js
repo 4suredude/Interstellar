@@ -32,7 +32,7 @@
     mode: 'ffa', pendingMode: 'squad', match: null,
     banner: null, lastKillT: -99, combo: 0, duelW: 0, duelL: 0,
     demoT: 0, demoShip: null,
-    mapChunks: null, radarC: null,
+    mapChunks: null, emptyChunks: null, radarC: null,
     qualLock: false,    // dev/perf.js pins the tier so A/B runs are comparable
     // net
     net: null, netErr: '', myId: 0, name: '', nameStr: '', stateTick: 0, kaTimer: 0,
@@ -1775,6 +1775,7 @@
     const W = G.W;
     const doc = GLOBAL.document;
     G.mapChunks = new Map();          // invalidates every baked chunk
+    G.emptyChunks = new Set();        // known-empty chunk keys, kept apart
 
     // no radar prerender: the endless world's scanner samples the sparse
     // tile field live, drawing only its local window each frame
@@ -1790,10 +1791,14 @@
 
   function mapChunk(chx, chy) {
     const key = chy * NCHUNK + chx;
+    // Empty chunks live in their own set: a null sentinel costs 8 bytes, but
+    // in the LRU it costs a SLOT — and deep space is almost all empty, so a
+    // long burn through nothing used to evict the real terrain behind you,
+    // chunk by chunk, purely to remember that nothing is still nothing.
+    if (G.emptyChunks.has(key)) return null;
     let ch = G.mapChunks.get(key);
     if (ch !== undefined) {
       // re-insert so Map order tracks recency and eviction is LRU
-      // (null is a cached EMPTY sentinel — most of space is empty)
       G.mapChunks.delete(key); G.mapChunks.set(key, ch);
       return ch;
     }
@@ -1802,6 +1807,13 @@
     if (bakeBudget <= 0) return undefined;
     bakeBudget--;
     ch = bakeChunk(chx, chy);
+    if (ch === null) {
+      G.emptyChunks.add(key);
+      // a Set of ints is cheap; the cap is only a backstop for a full tour
+      // of all ~50k chunks (which would still be just ~400KB)
+      if (G.emptyChunks.size > 50000) G.emptyChunks.clear();
+      return null;
+    }
     G.mapChunks.set(key, ch);
     if (G.mapChunks.size > CHUNK_CACHE) {
       const oldest = G.mapChunks.keys().next().value;
@@ -1817,7 +1829,8 @@
       for (let cx = x0 - 1; cx <= x1 + 1 && bakeBudget > 0; cx++) {
         if (cx < 0 || cx >= NCHUNK) continue;
         if (cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1) continue;  // already on screen
-        if (G.mapChunks.has(cy * NCHUNK + cx)) continue;
+        const k = cy * NCHUNK + cx;
+        if (G.mapChunks.has(k) || G.emptyChunks.has(k)) continue;
         mapChunk(cx, cy);
       }
     }
@@ -2884,7 +2897,14 @@
   function capitalSprite(kind, hue) {
     const key = 'cap:' + kind + ':' + Math.round(hue);
     let cached = atlasCache.get(key);
-    if (cached) return cached;
+    if (cached) {
+      // LRU touch, same as shipAtlas. Without it a capital being drawn EVERY
+      // FRAME only ever ages: enough hue-diverse fighters in view and the
+      // eviction lands on the boss you're fighting, whose megapixel re-bake
+      // is a visible hitch — repeating, because it never regains recency.
+      atlasCache.delete(key); atlasCache.set(key, cached);
+      return cached;
+    }
     const t = SIM.CAPITALS[kind];
     const bakeR = Math.min(t.radius, 132);          // draw-time upscale past this
     const r0 = bakeR * 1.5;
@@ -4739,6 +4759,9 @@
   // menu/system keys the game always consumes; per-action keys come from BINDS
   const HANDLED = new Set(['Enter', 'Backspace', 'Escape', 'Tab',
     'KeyM', 'KeyN', 'KeyP', 'KeyF', 'KeyO', 'KeyK']);
+  // keys the rebind capture refuses: everything in HANDLED except Tab, whose
+  // only menu job (standings) is itself a rebindable action
+  const RESERVED_KEYS = new Set([...HANDLED].filter(k => k !== 'Tab'));
 
   function onKeyDown(e) {
     audioInit();
@@ -4770,7 +4793,13 @@
     if (G.ctlOpen) {
       e.preventDefault();
       if (G.bindWait) {
-        if (code !== 'Escape') {
+        // menu keys can't be flight keys: their handlers run before the
+        // action dispatch, so a bomb bound to M would toggle the mute on
+        // every drop, and a gun on Enter would open the chat line mid-burst.
+        // Tab is the one HANDLED key that's honestly rebindable.
+        if (RESERVED_KEYS.has(code)) {
+          say(keyName(code) + ' is a menu key — pick another.', '#f88');
+        } else if (code !== 'Escape') {
           const act = BIND_ORDER[G.bindSel][0];
           // a key can only drive one action — take it from whoever had it
           for (const k in BINDS) {
@@ -4824,7 +4853,13 @@
       return;
     }
     if (code === 'KeyF') { toggleFullscreen(); return; }
-    if (code === 'KeyK' && G.state === 'play') { G.ctlOpen = true; G.bindWait = false; return; }
+    if (code === 'KeyK' && G.state === 'play') {
+      G.ctlOpen = true; G.bindWait = false;
+      // rebinding is not a thing you do under fire: solo pauses with the
+      // screen (online can't pause, same rule as the menu overlay)
+      if (!G.online) G.paused = true;
+      return;
+    }
     if (isAct(code, 'bay') && G.mmo && G.state === 'play' && !G.chatOpen) {
       G.upgOpen = !G.upgOpen;
       e.preventDefault();

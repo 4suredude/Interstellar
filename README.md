@@ -410,11 +410,72 @@ Measured on one pinned world, presented frames, before → after:
 | 14-ship brawl | 38.3 → **56.4** fps | 88.6 → **128.9** fps |
 | Under a carrier | 34.8 → **46.5** fps | 107.4 → **146.2** fps |
 
-## Roadmap ideas
+## Roadmap
 
-- Mines, decoys, and portals
-- Flag capture and ball-game modes
-- Squad tags and squad-vs-squad ladders
-- Account authentication (callsigns are currently honor-system identity)
-- Gamepad support (touch controls shipped: virtual stick + weapon buttons,
-  tappable menus, phone-compact HUD)
+Ordered by what actually blocks what, from a full review of the codebase.
+
+### Near term — correctness and trust
+
+- **Pilot authentication.** Callsigns are honor-system identity: anyone can
+  join as any name, so the Elo ladder and lifetime stats are forgeable. The
+  fix is small and zero-dependency — the server mints a secret per new
+  callsign, the client stores it, joins with a claimed name and no matching
+  secret are rejected. This is the one prerequisite for taking the ladder
+  public.
+- **Live boss hull sync.** Online, capital hull points ride a 5-second
+  `caps` broadcast, so a squad boss fight watches the bar snap rather than
+  drain. Piggyback hp deltas on the existing `caphit` relay (or tighten the
+  sync to 1 s) and the fight reads live.
+- **Dreadnought loot scaling.** Solo kill times measured 5 s / 21 s / 54 s
+  across the boss tiers — a sound ladder — but payout should probably scale
+  with participants so a six-pilot kill doesn't split ¢7,200 into pocket
+  change. Needs online playtesting first.
+
+### Mid term — renderer and scale ceilings
+
+- **Emissive bloom buffer.** Bloom is the largest remaining render cost
+  (~45% of a desktop frame) and it re-samples the *whole canvas*, scenery
+  included. Drawing glows, engine wash, and projectiles into a dedicated
+  additive buffer and blooming only that would roughly halve desktop frame
+  time — and stop the backdrop from glowing.
+- **Interest management.** Snapshots are O(clients × ships) at 30 Hz;
+  every client hears about every ship in a 115 km world. Beyond ~30
+  players the relay should send only ships within scanner range — the
+  quadrant lattice is already the natural bucket structure.
+- **Spatial hash for projectiles.** Bullet–ship collision is a full cross
+  product. Fine at 40 ships; an actual MMO population wants a coarse grid.
+- **Durable zone state.** The server persists pilots to a JSON file with
+  debounced writes; territory and round state die with the process. An
+  append-only log (still zero-dependency) would let a zone restart without
+  amnesia.
+- **Gamepad support** (touch controls shipped: virtual stick + weapon
+  buttons, tappable menus, phone-compact HUD).
+
+### Long term — the big swings
+
+- **WebGL2 renderer.** Canvas2D is the hard ceiling — every sprite is a
+  CPU-side composite. Batching the existing atlases through WebGL2 lifts
+  desktop several-fold and makes phone bloom free; the sprite pipeline
+  already renders into atlases, so the art survives unchanged.
+- **Sharded zones.** One process is one zone. A gateway handing pilots
+  between zone processes (per-galaxy-quadrant) with cross-zone chat is the
+  real MMO shape, and the owner-trusting relay design was chosen so this
+  splits cleanly.
+- **Mines, decoys, portals; flag capture and ball modes; squad-vs-squad
+  ladders** — the classic-zone toolbox, in roughly that order.
+- **Replay capture.** The binary snapshot stream already contains a match;
+  writing it to disk and replaying it through the existing jitter buffer is
+  most of a killcam/replay system.
+
+### Known limits, accepted deliberately
+
+- The netcode trusts each client about its own ship (SubSpace's own model).
+  Server-side sanity caps bound speed, fire rate, damage, and kill claims,
+  but a modified client can still fly dishonestly. Full server authority is
+  a different game architecture, not a patch.
+- `interstellar.html` is a build artifact committed for zero-setup play;
+  it regenerates via `node dev/build.js`.
+- Perf numbers in this README come from software rasterization in CI-class
+  containers (and shared-host CPU varies run to run — the A/B pairs above
+  were measured back-to-back in the same window); real hardware runs far
+  faster, and relative wins are what transfer.
