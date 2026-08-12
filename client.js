@@ -1212,6 +1212,41 @@
         case 'raider':
           say('A marauder pack warps in — kill them for their bounty.', '#f96');
           break;
+        case 'caphit':
+          spark(e.x + rand(-40, 40), e.y + rand(-40, 40), 30, 5, 190);
+          break;
+        case 'capgun':
+          sndShoot(e.x, e.y, 3);
+          flash(e.x, e.y, 34, 205);
+          break;
+        case 'dock':
+          if (mine) { banner('DOCKED', 'refitting aboard the carrier — G to launch', 2.4); sndPrize(); }
+          break;
+        case 'undock':
+          if (mine) say('Launched from the carrier.', '#8df');
+          break;
+        case 'capspawn':
+          say('A ' + e.label + ' has returned to the deep.', '#f96');
+          break;
+        case 'capkill': {
+          // a capital dying is a real spectacle
+          boomFX(e.x, e.y, 300, e.team ? 200 : 20, true);
+          for (let i = 0; i < 10; i++) {
+            const a = rand(0, TAU), rr = rand(40, 220);
+            G.waves.push({ x: e.x + Math.cos(a) * rr, y: e.y + Math.sin(a) * rr, r: 6, maxR: 150, t: 0, dur: 0.6, hue: 30 });
+          }
+          G.shake = Math.max(G.shake, 26);
+          say(e.label + ' destroyed!', '#ff8');
+          if (G.mmo && e.loot && G.player && !G.player.dead &&
+              Math.hypot(e.x - G.player.x, e.y - G.player.y) < 3000) {
+            G.credits += e.loot.c;
+            G.relics += e.loot.r;
+            saveMMO();
+            banner(e.label.toUpperCase() + ' DOWN', '+' + e.loot.c + ' credits · +' + e.loot.r + ' ◆ relic' + (e.loot.r > 1 ? 's' : ''), 3.4);
+            contractProgress('boss');
+          }
+          break;
+        }
         case 'boom':
           boomFX(e.x, e.y, 70 + 28 * e.level, 25, e.level >= 2);
           break;
@@ -1569,6 +1604,31 @@
       case 'terr':
         applyCapture(msg.qx, msg.qy, msg.team);
         break;
+      case 'caps':
+        // hull sync: position is already identical everywhere (closed-form)
+        if (W && W.capitals && Array.isArray(msg.h)) {
+          for (const row of msg.h) {
+            const c = W.capitals.find(k => k.id === row[0]);
+            if (c) { c.hp = row[1]; c.dead = !!row[2]; }
+          }
+        }
+        break;
+      case 'capgun':
+        sndShoot(msg.x, msg.y, 3);
+        flash(msg.x, msg.y, 34, 205);
+        break;
+      case 'capkill': {
+        const c = W && W.capitals && W.capitals.find(k => k.id === msg.cap);
+        if (c) { c.dead = true; c.hp = 0; }
+        handleEvents([{ e: 'capkill', cap: msg.cap, kind: msg.kind, x: msg.x, y: msg.y, team: msg.team, loot: msg.loot, label: msg.label }]);
+        break;
+      }
+      case 'capspawn': {
+        const c = W && W.capitals && W.capitals.find(k => k.id === msg.cap);
+        if (c) { c.dead = false; c.hp = c.maxHp; }
+        say('A ' + msg.label + ' has returned to the deep.', '#f96');
+        break;
+      }
       case 'relic-':
         if (W && W.relicSlots && W.relicSlots[msg.i]) W.relicSlots[msg.i].taken = W.time;
         break;
@@ -2730,6 +2790,101 @@
     return cached;
   }
 
+  // Capital sprite: the SAME heightmap → albedo → per-pixel lighting bake the
+  // fighters use, so a carrier reads as the same fleet, just enormous. Baked
+  // once nose-up and rotated at draw time (36 rotation frames of a 400px hull
+  // would be tens of megabytes), with the bake resolution capped so the
+  // biggest dreadnought still costs less than a megabyte.
+  function capitalSprite(kind, hue) {
+    const key = 'cap:' + kind + ':' + Math.round(hue);
+    let cached = atlasCache.get(key);
+    if (cached) return cached;
+    const t = SIM.CAPITALS[kind];
+    const bakeR = Math.min(t.radius, 132);          // draw-time upscale past this
+    const r0 = bakeR * 1.5;
+    const cell = Math.ceil(r0 * 2 * 1.4) + 12;
+    const SS = 2;
+    const cs = cell * SS, r = r0 * SS;
+    const doc = GLOBAL.document;
+    const mk = () => { const c = doc.createElement('canvas'); c.width = c.height = cs; return c; };
+    const hC = mk(), aC = mk(), fC = mk(), sC = mk();
+    const hctx = hC.getContext('2d'), actx2 = aC.getContext('2d');
+    const fctx = fC.getContext('2d'), sctx = sC.getContext('2d');
+    paintHeight(hctx, t, r, 0, cs);
+    try {
+      sctx.setTransform(1, 0, 0, 1, 0, 0);
+      sctx.clearRect(0, 0, cs, cs);
+      sctx.drawImage(hC, 0, 0);
+      hctx.setTransform(1, 0, 0, 1, 0, 0);
+      hctx.clearRect(0, 0, cs, cs);
+      hctx.filter = 'blur(' + (SS * 0.9) + 'px)';
+      hctx.drawImage(sC, 0, 0);
+      hctx.filter = 'none';
+    } catch (e) { }
+    paintAlbedo(actx2, t, hue, r, 0, cs);
+    lightCompose(fctx, hctx.getImageData(0, 0, cs, cs), actx2.getImageData(0, 0, cs, cs), cs);
+    const out = doc.createElement('canvas');
+    out.width = out.height = cell;
+    out.getContext('2d').drawImage(fC, 0, 0, cs, cs, 0, 0, cell, cell);
+    cached = { c: out, cell, scale: t.radius / bakeR };
+    atlasCache.set(key, cached);
+    return cached;
+  }
+
+  function drawCapital(c) {
+    const t = c.t;
+    const span = c.r * 1.6;
+    if (c.x < camL - span || c.x > camR + span || c.y < camT - span || c.y > camB + span) return;
+    const F = c.team ? SIM.FACTIONS[c.team] : null;
+    const hue = F ? F.hue : (t.hue == null ? 350 : t.hue);
+    const spr = capitalSprite(c.kind, hue);
+    const drawn = spr.cell * spr.scale;
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    // engine glow + hull aura before the hull itself
+    ctx.globalCompositeOperation = 'lighter';
+    drawGlow(0, 0, c.r * 1.9, hue, c.boss ? 0.24 : 0.18);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.rotate(c.angle);
+    // engine wash out the back
+    ctx.globalCompositeOperation = 'lighter';
+    const pu = 0.7 + 0.3 * Math.sin(G.time * 2.4 + c.id);
+    for (const en of t.engines)
+      drawGlow(en[0] * c.r, en[1] * c.r, c.r * 0.30 * pu, c.boss ? 12 : 20, 0.5);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(spr.c, -drawn / 2, -drawn / 2, drawn, drawn);
+    // hit flash
+    if (c.hitT > 0) {
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = clamp(c.hitT / 0.12, 0, 1) * 0.5;
+      ctx.drawImage(spr.c, -drawn / 2, -drawn / 2, drawn, drawn);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    // running lights down the flanks
+    for (let i = 0; i < 8; i++) {
+      const lx = (-0.82 + i * 0.22) * c.r;
+      const on = Math.sin(G.time * 2.6 + i * 0.9 + c.id) > 0;
+      ctx.fillStyle = on ? 'hsla(' + hue + ',95%,72%,0.95)' : 'rgba(60,70,92,0.5)';
+      const ly = (0.30 - Math.abs(i - 3.5) * 0.03) * c.r;
+      ctx.fillRect(lx, ly, 3, 3);
+      ctx.fillRect(lx, -ly, 3, 3);
+    }
+    ctx.restore();
+
+    // nameplate + hull bar
+    const dead = c.dead;
+    if (!dead) {
+      const nm = (F ? F.name.split(' ')[0] + ' ' : '') + t.label.toUpperCase();
+      txt(nm, c.x, c.y - c.r - 22, 12, c.boss ? 'rgba(255,150,120,0.9)' : 'rgba(150,200,255,0.85)', 'center', 800);
+      const bw = c.r * 1.3, frac = clamp(c.hp / c.maxHp, 0, 1);
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(c.x - bw / 2, c.y - c.r - 16, bw, 5);
+      ctx.fillStyle = c.boss ? 'hsla(' + (10 + 40 * frac) + ',90%,58%,0.95)' : 'hsla(200,85%,60%,0.9)';
+      ctx.fillRect(c.x - bw / 2, c.y - c.r - 16, bw * frac, 5);
+    }
+  }
+
   function drawShip(s) {
     if (s.dead) return;
     if (s.x < camL - 60 || s.x > camR + 60 || s.y < camT - 60 || s.y > camB + 60) return;
@@ -2880,14 +3035,8 @@
     camL = G.cam.x - vw / 2 - 90; camR = G.cam.x + vw / 2 + 90;
     camT = G.cam.y - vh / 2 - 90; camB = G.cam.y + vh / 2 + 90;
 
-    // faction motherships anchored in their fortress keeps
-    if (W.motherships) {
-      for (const tk2 in W.motherships) {
-        const ms = W.motherships[tk2];
-        if (ms.x > camL - 300 && ms.x < camR + 300 && ms.y > camT - 300 && ms.y < camB + 300)
-          drawMothership(ms);
-      }
-    }
+    // capital ships: squad carriers under way, and the hostile leviathans
+    if (W.capitals) for (const c of W.capitals) if (!c.dead) drawCapital(c);
 
     // THE MAELSTROM: storm boundary, flying rock, wormholes
     if (W.danger) {
@@ -3246,50 +3395,6 @@
     return name;
   }
 
-  // the mothership: a capital-ship anchor at the heart of a squad's
-  // fortress — drawn by hand, facing the war
-  function drawMothership(ms) {
-    const F = SIM.FACTIONS[ms.team];
-    const ang = Math.atan2(WORLD / 2 - ms.y, WORLD / 2 - ms.x);
-    ctx.save();
-    ctx.translate(ms.x, ms.y);
-    ctx.globalCompositeOperation = 'lighter';
-    drawGlow(0, 0, 260, F.hue, 0.22);
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.rotate(ang);
-    const hull = [[190, 0], [150, 26], [60, 58], [-120, 46], [-172, 22], [-172, -22], [-120, -46], [60, -58], [150, -26]];
-    ctx.beginPath();
-    hull.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
-    ctx.closePath();
-    ctx.fillStyle = '#1c2230';
-    ctx.fill();
-    ctx.strokeStyle = 'hsla(' + F.hue + ',70%,55%,0.6)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    // faction stripe + spine
-    ctx.fillStyle = 'hsla(' + F.hue + ',65%,45%,0.5)';
-    ctx.fillRect(-150, -8, 300, 16);
-    ctx.strokeStyle = 'rgba(150,175,220,0.25)';
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(-165, 0); ctx.lineTo(185, 0); ctx.stroke();
-    // bridge dome
-    ctx.fillStyle = 'rgba(140,220,255,0.5)';
-    ctx.beginPath(); ctx.arc(80, 0, 13, 0, TAU); ctx.fill();
-    // running lights blink down the flanks
-    for (let i = 0; i < 7; i++) {
-      const lx = -150 + i * 45;
-      const on = Math.sin(G.time * 3 + i * 1.1) > 0;
-      ctx.fillStyle = on ? 'hsla(' + F.hue + ',95%,70%,0.95)' : 'rgba(70,80,100,0.5)';
-      ctx.fillRect(lx, -40 + Math.abs(i - 3) * 4, 3, 3);
-      ctx.fillRect(lx, 37 - Math.abs(i - 3) * 4, 3, 3);
-    }
-    // engine bloom
-    const pu = 0.6 + 0.4 * Math.sin(G.time * 2.2);
-    ctx.globalCompositeOperation = 'lighter';
-    for (const ey of [-26, 0, 26]) drawGlow(-185, ey, 26 * pu, 18, 0.5);
-    ctx.restore();
-  }
-
   // CONTACT markers + hunt compass: encounters are events, and deep space
   // always offers a heading toward the next one
   function drawContacts() {
@@ -3369,6 +3474,41 @@
       txt('¢ ' + G.credits + '  ·  ◆ ' + G.relics + '  ·  U bay · J board', 20, narrow ? 104 : 126, narrow ? 10 : 12, '#fd8', 'left', 700);
       drawContracts(narrow);
       if (G.upgOpen) drawUpgradeBay();
+    }
+
+    // BOSS ENGAGEMENT: the nearest hostile capital in range takes over the
+    // top of the screen with a proper health bar
+    if (G.W.capitals && !p.dead) {
+      let boss = null, bd = 2600;
+      for (const c of G.W.capitals) {
+        if (!c.boss || c.dead) continue;
+        const d = Math.hypot(c.x - p.x, c.y - p.y);
+        if (d < bd) { bd = d; boss = c; }
+      }
+      if (boss) {
+        const bw = Math.min(560, vw - 60), bx = vw / 2 - bw / 2, by = narrow ? 92 : 44;
+        const frac = clamp(boss.hp / boss.maxHp, 0, 1);
+        panel(bx - 6, by - 6, bw + 12, 30);
+        ctx.fillStyle = 'rgba(255,255,255,0.07)';
+        ctx.fillRect(bx, by + 10, bw, 10);
+        ctx.fillStyle = 'hsla(' + (8 + 34 * frac) + ',90%,55%,0.95)';
+        ctx.fillRect(bx, by + 10, bw * frac, 10);
+        // tier pips so you know what you picked a fight with
+        let pips = '';
+        for (let i = 0; i < (boss.t.tier || 1); i++) pips += '◆';
+        txt(pips + ' ' + boss.t.label.toUpperCase(), bx, by + 6, 12, '#fca', 'left', 800);
+        txt(Math.ceil(boss.hp).toLocaleString() + ' / ' + boss.maxHp.toLocaleString(), bx + bw, by + 6, 11, '#c99', 'right', 700);
+      }
+    }
+
+    // docking prompt / status
+    if (!p.dead && G.player.team && G.W.motherships) {
+      const car = G.W.motherships[G.player.team];
+      if (p.docked) {
+        txt('DOCKED — G to launch', vw / 2, vh - 96, 15, '#8fd', 'center', 800);
+      } else if (car && !car.dead && Math.hypot(car.x - p.x, car.y - p.y) < car.r + 190) {
+        txt('G — dock with the carrier', vw / 2, vh - 96, 13, 'rgba(150,230,255,0.85)', 'center', 700);
+      }
     }
 
     // inside the maelstrom the screen itself feels hostile
@@ -3613,16 +3753,22 @@
     ctx.lineTo(rx + R / 2 + Math.cos(swa) * R / 2, ry + R / 2 + Math.sin(swa) * R / 2);
     ctx.stroke();
     const on = (x, y) => x >= wx && x <= wx + RW && y >= wy && y <= wy + RW;
-    // motherships paint as faction diamonds
-    if (G.W.motherships) {
-      for (const tk2 in G.W.motherships) {
-        const ms = G.W.motherships[tk2];
-        if (!on(ms.x, ms.y)) continue;
+    // capitals paint as diamonds — faction colors for carriers, a pulsing
+    // red for the hostile leviathans worth hunting
+    if (G.W.capitals) {
+      for (const c of G.W.capitals) {
+        if (c.dead || !on(c.x, c.y)) continue;
         ctx.save();
-        ctx.translate(rx + (ms.x - wx) * k, ry + (ms.y - wy) * k);
+        ctx.translate(rx + (c.x - wx) * k, ry + (c.y - wy) * k);
         ctx.rotate(Math.PI / 4);
-        ctx.fillStyle = 'hsla(' + SIM.FACTIONS[ms.team].hue + ',90%,62%,0.95)';
-        ctx.fillRect(-3, -3, 6, 6);
+        if (c.boss) {
+          const a = 0.55 + 0.45 * Math.sin(G.time * 5 + c.id);
+          ctx.fillStyle = 'rgba(255,90,70,' + a.toFixed(2) + ')';
+          ctx.fillRect(-4, -4, 8, 8);
+        } else {
+          ctx.fillStyle = 'hsla(' + SIM.FACTIONS[c.team].hue + ',90%,62%,0.95)';
+          ctx.fillRect(-3, -3, 6, 6);
+        }
         ctx.restore();
       }
     }
@@ -4075,6 +4221,7 @@
     { k: 'relic', n: 'Recovery', d: n => 'recover ' + n + ' relic' + (n > 1 ? 's' : ''), min: 1, max: 2, pay: 260 },
     { k: 'survey', n: 'Survey', d: n => 'chart ' + n + ' different quadrants', min: 3, max: 6, pay: 55 },
     { k: 'hold', n: 'Conquest', d: n => 'help take ' + n + ' quadrant' + (n > 1 ? 's' : ''), min: 1, max: 2, pay: 200 },
+    { k: 'boss', n: 'Leviathan Hunt', d: n => 'destroy ' + n + ' capital ship' + (n > 1 ? 's' : ''), min: 1, max: 2, pay: 700 },
   ];
   function rollContract() {
     // squadless pilots can't take ground, so never hand them a Conquest
@@ -4362,7 +4509,7 @@
 
   const HANDLED = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab',
     'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'Enter', 'Backspace', 'Escape',
-    'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyB', 'KeyE', 'KeyQ', 'KeyR', 'KeyT', 'KeyM', 'KeyN', 'KeyP', 'KeyF', 'KeyO', 'KeyU', 'KeyJ']);
+    'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyB', 'KeyE', 'KeyQ', 'KeyR', 'KeyT', 'KeyM', 'KeyN', 'KeyP', 'KeyF', 'KeyO', 'KeyU', 'KeyJ', 'KeyG']);
 
   function onKeyDown(e) {
     audioInit();
@@ -4424,6 +4571,12 @@
     }
     if (code === 'KeyJ' && G.mmo && G.state === 'play' && !G.chatOpen) {
       G.boardOpen = !G.boardOpen;
+      e.preventDefault();
+      return;
+    }
+    if (code === 'KeyG' && G.state === 'play' && !G.chatOpen && G.player) {
+      if (G.player.docked) SIM.undockShip(G.W, G.player);
+      else if (!SIM.dockShip(G.W, G.player)) say('No carrier in docking range.', '#f88');
       e.preventDefault();
       return;
     }

@@ -456,8 +456,12 @@ const tk = { 1: 0, 2: 0 };
 // world-clock sync: maelstrom rock positions are a closed-form function of
 // W.time, so clients periodically re-align to the server's clock
 setInterval(() => {
-  if (clients.size) broadcast({ t: 'clock', wt: Math.round(W.time * 100) / 100 });
-}, 10000);
+  if (!clients.size) return;
+  broadcast({ t: 'clock', wt: Math.round(W.time * 100) / 100 });
+  // capital hull points: cheap, low-rate, and the only capital state that
+  // isn't already derivable from the shared clock
+  broadcast({ t: 'caps', h: W.capitals.map(c => [c.id, Math.round(c.hp), c.dead ? 1 : 0]) });
+}, 5000);
 
 const rk = new Map();               // per-round kills, for MVP
 const corePts = { 1: 0, 2: 0 };
@@ -919,6 +923,17 @@ setInterval(() => {
         break;
       case 'raider':   // marauders spawned by the event timeline join as bots
         broadcast({ t: 'join', p: { id: e.id, name: e.name, ship: e.ship, hue: e.hue, team: 5, bot: 1, kills: 0, deaths: 0, score: 0 } });
+        break;
+      // capital ships fly a deterministic course on every peer, so only
+      // their hull state and gunfire need to travel
+      case 'capgun':
+        broadcast({ t: 'capgun', x: Math.round(e.x), y: Math.round(e.y) });
+        break;
+      case 'capkill':
+        broadcast({ t: 'capkill', cap: e.cap, kind: e.kind, x: Math.round(e.x), y: Math.round(e.y), team: e.team, loot: e.loot, label: e.label });
+        break;
+      case 'capspawn':
+        broadcast({ t: 'capspawn', cap: e.cap, kind: e.kind, x: Math.round(e.x), y: Math.round(e.y), label: e.label });
         break;
       case 'kill': {
         // a bot died in the server sim

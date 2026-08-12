@@ -54,6 +54,31 @@ no law reaches the Dead Zone.
 SHADE) forms on you — two squadmates who hold formation off your stern,
 hunt what you hunt, and fall on whoever falls on you.
 
+**Capital ships.** Each squad's **carrier** is a 300-metre hull rendered
+through the *same* heightmap → albedo → per-pixel lighting bake as the
+fighters, so it reads as the same fleet at ten times the scale — and it is
+**under way**, patrolling its quadrant rather than parked. Fly into its
+shadow and press `G` to **dock**: you ride along inside the bay, untouchable,
+refitting at four times the normal rate, until you press `G` to launch. Its
+course is a closed-form epicycle from the world seed, so every peer sees the
+carrier in the same place with no position netcode at all.
+
+**Boss hunts.** Three classes of hostile capital prowl the frontier, and they
+range from soloable to a squad wall:
+
+| Boss | Where | Hull | Payout |
+| --- | --- | --- | --- |
+| ◆ **Reaver** | open frontier (×3) | 5,200 | ¢850 · ◆1 |
+| ◆◆ **Leviathan** | the Maelstrom | 21,000 | ¢2,600 · ◆2 |
+| ◆◆◆ **Dreadnought** | the Dead Zone | 54,000 | ¢7,200 · ◆4 |
+
+They fly their own patrols, fire batteries of turrets at anything in range
+(everyone is an enemy), ram like a wall, and shed a cloud of greens when they
+break up. Get within engagement range and a tiered hull bar takes the top of
+your screen. Bullets chip them; **bombs are how you actually crack one**.
+They respawn at their lair on a timer, so a lair is a place you can farm —
+if you can take it.
+
 **Contracts.** You always carry three, and they complete from what you'd be
 doing anyway — Hunt, Bounty (marauder heads), Salvage, Scavenge (derelict
 caches), Recovery (relics), Survey (chart new quadrants), and Conquest (help
@@ -324,6 +349,7 @@ A new generation of hulls joins the fleet — each with a mechanic all its own:
 | `Enter` | Chat (online) — `/duel` `/accept` `/stats` `/votemap` `/help`, `//` for team |
 | `P` / `Esc` | Pause / menu |
 | `U` / `J` | Upgrade bay / contract board (The Zone and online) |
+| `G` | Dock with / launch from your squad's carrier |
 | `M` | Mute all · `N` Music on/off · `F` Fullscreen |
 
 ## Architecture

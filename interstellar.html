@@ -105,6 +105,66 @@
   const PRIZE_CAP = 220;
 
   // the four squads that anchor the corner quadrants
+  // ------------------------------------------------------------ capitals
+  // Capital ships: the squads' motherships and the hostile leviathans that
+  // prowl the frontier. Same visual language as the fighters (nose +x unit
+  // polygons, baked through the identical lighting pipeline), but they MOVE,
+  // they carry hull points and turrets, and you can dock with your own.
+  const CAPITALS = {
+    carrier: {
+      label: 'Carrier', radius: 150, hp: 34000, speed: 30, turn: 0.16,
+      turrets: 4, range: 1000, dmg: 170, gap: 1.0, gunSpeed: 620, dockable: true,
+      shape: [[1.0, 0], [0.86, 0.15], [0.30, 0.24], [-0.42, 0.30], [-0.80, 0.24],
+        [-0.96, 0.13], [-0.96, -0.13], [-0.80, -0.24], [-0.42, -0.30], [0.30, -0.24], [0.86, -0.15]],
+      accent: [[0.72, 0], [0.20, 0.07], [-0.70, 0.08], [-0.82, 0], [-0.70, -0.08], [0.20, -0.07]],
+      deco: [[[0.55, 0.19], [-0.62, 0.25]], [[0.55, -0.19], [-0.62, -0.25]],
+        [[0.10, 0.26], [0.10, -0.26]], [[-0.30, 0.29], [-0.30, -0.29]]],
+      cockpit: [0.46, 0, 0.13, 0.085],
+      engines: [[-0.93, 0.17], [-0.93, 0], [-0.93, -0.17]],
+    },
+    reaver: {
+      label: 'Reaver', tier: 1, radius: 66, hp: 5200, speed: 78, turn: 0.5,
+      turrets: 2, range: 780, dmg: 150, gap: 0.85, gunSpeed: 680, hue: 32,
+      loot: { c: 850, r: 1 }, respawn: 150,
+      shape: [[1.15, 0], [0.30, 0.30], [-0.20, 0.70], [-0.62, 0.44], [-0.55, 0.12],
+        [-0.90, 0], [-0.55, -0.12], [-0.62, -0.44], [-0.20, -0.70], [0.30, -0.30]],
+      accent: [[0.80, 0], [0.16, 0.11], [-0.40, 0.08], [-0.40, -0.08], [0.16, -0.11]],
+      deco: [[[0.10, 0.34], [-0.44, 0.52]], [[0.10, -0.34], [-0.44, -0.52]]],
+      cockpit: [0.40, 0, 0.15, 0.11],
+      engines: [[-0.72, 0.30], [-0.72, -0.30]],
+    },
+    leviathan: {
+      label: 'Leviathan', tier: 2, radius: 118, hp: 21000, speed: 46, turn: 0.26,
+      turrets: 6, range: 950, dmg: 205, gap: 0.62, gunSpeed: 640, hue: 285,
+      loot: { c: 2600, r: 2 }, respawn: 260,
+      shape: [[1.05, 0], [0.72, 0.28], [0.16, 0.40], [-0.28, 0.62], [-0.66, 0.50],
+        [-0.72, 0.20], [-0.98, 0.08], [-0.98, -0.08], [-0.72, -0.20], [-0.66, -0.50],
+        [-0.28, -0.62], [0.16, -0.40], [0.72, -0.28]],
+      accent: [[0.78, 0], [0.26, 0.12], [-0.36, 0.14], [-0.62, 0], [-0.36, -0.14], [0.26, -0.12]],
+      deco: [[[0.50, 0.30], [-0.50, 0.44]], [[0.50, -0.30], [-0.50, -0.44]],
+        [[0.00, 0.42], [0.00, -0.42]], [[-0.36, 0.56], [-0.36, -0.56]]],
+      cockpit: [0.50, 0, 0.14, 0.10],
+      engines: [[-0.95, 0.10], [-0.95, -0.10], [-0.70, 0.42], [-0.70, -0.42]],
+    },
+    dreadnought: {
+      label: 'Dreadnought', tier: 3, radius: 178, hp: 54000, speed: 28, turn: 0.13,
+      turrets: 9, range: 1150, dmg: 265, gap: 0.5, gunSpeed: 600, hue: 96,
+      loot: { c: 7200, r: 4 }, respawn: 420,
+      shape: [[1.10, 0], [0.92, 0.20], [0.42, 0.30], [0.34, 0.56], [-0.10, 0.66],
+        [-0.44, 0.52], [-0.52, 0.26], [-0.86, 0.30], [-1.00, 0.12], [-1.00, -0.12],
+        [-0.86, -0.30], [-0.52, -0.26], [-0.44, -0.52], [-0.10, -0.66], [0.34, -0.56],
+        [0.42, -0.30], [0.92, -0.20]],
+      accent: [[0.94, 0], [0.42, 0.10], [-0.18, 0.14], [-0.74, 0.09], [-0.84, 0],
+        [-0.74, -0.09], [-0.18, -0.14], [0.42, -0.10]],
+      deco: [[[0.70, 0.24], [-0.60, 0.30]], [[0.70, -0.24], [-0.60, -0.30]],
+        [[0.20, 0.50], [-0.30, 0.58]], [[0.20, -0.50], [-0.30, -0.58]],
+        [[-0.05, 0.30], [-0.05, -0.30]]],
+      cockpit: [0.60, 0, 0.15, 0.10],
+      engines: [[-0.97, 0.16], [-0.97, 0], [-0.97, -0.16], [-0.80, 0.34], [-0.80, -0.34]],
+    },
+  };
+  const BOSS_KINDS = ['reaver', 'leviathan', 'dreadnought'];
+
   const FACTIONS = {
     1: { name: 'CRIMSON PACT', hue: 358, qx: 0, qy: 0 },
     2: { name: 'COBALT COMBINE', hue: 215, qx: GRID - 1, qy: 0 },
@@ -444,7 +504,7 @@
     // FACTION FORTRESSES: each squad's home sits at the heart of its corner
     // quadrant — triple-walled, gated on the axis toward the core, with the
     // mothership anchored in the keep
-    W.motherships = {};
+    W.fortress = {};
     for (const team of [1, 2, 3, 4]) {
       const F = FACTIONS[team];
       const bx = F.qx * QUAD + (QUAD >> 1), by = F.qy * QUAD + (QUAD >> 1);
@@ -455,7 +515,7 @@
         fillRect(bx + ux * 17 - 1, by + uy * 17 - 1, 3, 3, 1);
       }
       bases.push({ x: bx, y: by, r: 30 });
-      W.motherships[team] = { team, x: (bx + 0.5) * TILE, y: (by + 0.5) * TILE };
+      W.fortress[team] = { x: (bx + 0.5) * TILE, y: (by + 0.5) * TILE };
     }
 
     // asteroid belts: rubble lives in BANDS around the sector, not
@@ -598,10 +658,12 @@
       ships: [], bullets: [], bombs: [], prizes: [],
       events: [],
       byId: new Map(),
-      nextId: 1, nextPrizeId: 1,
+      nextId: 1, nextPrizeId: 1, nextCapId: 1,
+      capitals: [], motherships: {}, fortress: {},
     };
     genMap(W);
     genDanger(W);
+    genCapitals(W);
     return W;
   }
   const ev = (W, e) => { W.events.push(e); };
@@ -660,7 +722,7 @@
     // faction gates: a jump from each squad's fortress door straight to the
     // core's rim — territory means a safe rear base WITH a lane to the war
     for (const team of [1, 2, 3, 4]) {
-      const ms = W.motherships && W.motherships[team];
+      const ms = W.fortress && W.fortress[team];
       if (!ms) continue;
       const ddx = WORLD / 2 - ms.x, ddy = WORLD / 2 - ms.y;
       const L = hyp(ddx, ddy) || 1;
@@ -833,6 +895,179 @@
       x: E.x + px * prog - py * off, y: E.y + py * prog + px * off,
       vx: px * sp, vy: py * sp, rad: 12 + r(4) * 14, shape: (r(2) * 1e9) | 0, spin: (r(3) - 0.5) * 3,
     };
+  }
+
+  // ------------------------------------------------------------ capital sim
+  function makeCapital(W, kind, team, x, y) {
+    const t = CAPITALS[kind];
+    const rng = W.rng;
+    // Patrol is a CLOSED-FORM epicycle around the berth, seeded from the
+    // world seed — every peer computes the same course at the same instant,
+    // so a moving capital needs no position netcode at all (same trick the
+    // maelstrom rocks use). Only hull points and death are shared state.
+    const span = QUADPX * 0.30;
+    const c = {
+      id: W.nextCapId++, kind, t, team: team || 0, boss: !!t.tier,
+      x, y, angle: 0, vx: 0, vy: 0,
+      hp: t.hp, maxHp: t.hp, r: t.radius,
+      fireT: rng() * t.gap, dead: false, respawnT: 0,
+      homeX: x, homeY: y, hitT: 0,
+      r1: span * (0.45 + rng() * 0.5), w1: (0.012 + rng() * 0.016) * (rng() < 0.5 ? -1 : 1), p1: rng() * TAU,
+      r2: span * (0.14 + rng() * 0.18), w2: (0.05 + rng() * 0.06) * (rng() < 0.5 ? -1 : 1), p2: rng() * TAU,
+    };
+    capitalAt(W, c, 0);
+    W.capitals.push(c);
+    return c;
+  }
+  // position + heading of a capital at world time t — pure function
+  function capitalAt(W, c, t) {
+    const a1 = c.p1 + c.w1 * t, a2 = c.p2 + c.w2 * t;
+    const nx = c.homeX + Math.cos(a1) * c.r1 + Math.cos(a2) * c.r2;
+    const ny = c.homeY + Math.sin(a1) * c.r1 + Math.sin(a2) * c.r2;
+    const vx = -Math.sin(a1) * c.r1 * c.w1 - Math.sin(a2) * c.r2 * c.w2;
+    const vy = Math.cos(a1) * c.r1 * c.w1 + Math.cos(a2) * c.r2 * c.w2;
+    c.x = clamp(nx, 500, WORLD - 500);
+    c.y = clamp(ny, 500, WORLD - 500);
+    c.vx = vx; c.vy = vy;
+    if (vx || vy) c.angle = Math.atan2(vy, vx);
+    return c;
+  }
+  function genCapitals(W) {
+    W.capitals = [];
+    W.nextCapId = 1;
+    W.motherships = {};
+    for (const team of [1, 2, 3, 4]) {
+      const f = W.fortress && W.fortress[team];
+      if (!f) continue;
+      W.motherships[team] = makeCapital(W, 'carrier', team, f.x, f.y);
+    }
+    // boss lairs: the nastiest hull sits in the lawless quadrant, the middle
+    // tier haunts the storm, and the light one prowls the open frontier
+    const rng = W.rng;
+    const lair = (kind, x, y) => {
+      const p = findClearNear(W, x, y, rng) || { x, y };
+      const c = makeCapital(W, kind, 0, p.x, p.y);
+      c.homeX = p.x; c.homeY = p.y;
+      return c;
+    };
+    if (W.deadZone) lair('dreadnought', (W.deadZone.qx + 0.5) * QUADPX, (W.deadZone.qy + 0.5) * QUADPX);
+    if (W.danger) lair('leviathan', W.danger.x, W.danger.y);
+    for (let i = 0; i < 3; i++) {
+      const a = rng() * TAU, rr = QUAD * (1.2 + rng() * 1.4);
+      lair('reaver', clamp(WORLD / 2 + Math.cos(a) * rr * TILE / TILE * TILE / TILE + Math.cos(a) * 0, 1500, WORLD - 1500),
+        clamp(WORLD / 2 + Math.sin(a) * rr, 1500, WORLD - 1500));
+    }
+  }
+  function damageCapital(W, c, dmg, att) {
+    if (c.dead || !(dmg > 0)) return;
+    c.hp -= dmg;
+    c.hitT = 0.12;
+    ev(W, { e: 'caphit', cap: c.id, x: c.x, y: c.y, dmg, att: att ? att.id : 0 });
+    if (c.hp <= 0) {
+      c.dead = true;
+      c.hp = 0;
+      c.respawnT = c.t.respawn || 0;
+      ev(W, {
+        e: 'capkill', cap: c.id, kind: c.kind, x: c.x, y: c.y,
+        team: c.team, killer: att ? att.id : 0,
+        loot: c.t.loot || null, label: c.t.label,
+      });
+      // a dying capital sheds its cargo
+      if (W.opts.spawnPrizes) {
+        for (let i = 0; i < 10; i++) {
+          if (W.prizes.length >= PRIZE_CAP + 8) break;
+          const a = rand(0, TAU), rr = rand(30, c.r * 1.4);
+          const px = c.x + Math.cos(a) * rr, py = c.y + Math.sin(a) * rr;
+          if (!solidAtPx(W, px, py)) addPrize(W, px, py);
+        }
+      }
+    }
+  }
+  function updateCapitals(W, dt) {
+    if (!W.capitals) return;
+    for (const c of W.capitals) {
+      if (c.dead) {
+        // bosses come back to their lair after a cooldown; carriers never die
+        if (c.respawnT > 0) {
+          c.respawnT -= dt;
+          if (c.respawnT <= 0 && W.opts.authority) {
+            c.dead = false; c.hp = c.maxHp;
+            c.x = c.homeX; c.y = c.homeY; c.vx = c.vy = 0;
+            ev(W, { e: 'capspawn', cap: c.id, kind: c.kind, x: c.x, y: c.y, label: c.t.label });
+          }
+        }
+        continue;
+      }
+      if (c.hitT > 0) c.hitT -= dt;
+      // carriers work their own quadrant, bosses circle their lair — both on
+      // the shared deterministic course, so all peers agree without syncing
+      capitalAt(W, c, W.time);
+
+      // turrets: bosses shoot everyone, carriers shoot their squad's enemies
+      c.fireT -= dt;
+      if (c.fireT <= 0 && W.opts.authority) {
+        c.fireT = c.t.gap;
+        let shots = 0;
+        for (const s of W.ships) {
+          if (s.dead || s.docked) continue;
+          if (!c.boss && c.team && s.team === c.team) continue;   // never its own
+          const d = hyp(s.x - c.x, s.y - c.y);
+          if (d > c.t.range || d < c.r * 0.6) continue;
+          const tt = d / c.t.gunSpeed;
+          const aim = Math.atan2(s.y + s.vy * tt - c.y, s.x + s.vx * tt - c.x) + rand(-0.05, 0.05);
+          const mx = c.x + Math.cos(aim) * (c.r + 12), my = c.y + Math.sin(aim) * (c.r + 12);
+          spawnBullets(W, c, [{
+            x: mx, y: my,
+            vx: Math.cos(aim) * c.t.gunSpeed, vy: Math.sin(aim) * c.t.gunSpeed,
+          }], 3, c.t.dmg, 1);
+          ev(W, { e: 'capgun', cap: c.id, x: mx, y: my, level: 3 });
+          if (++shots >= c.t.turrets) break;
+        }
+      }
+
+      // a hull that size does not yield: contact shoves and hurts
+      for (const s of W.ships) {
+        if (s.dead || s.remote || s.docked) continue;
+        const d = hyp(s.x - c.x, s.y - c.y);
+        if (d < c.r + s.t.radius) {
+          const inv = 1 / Math.max(1, d);
+          s.vx += (s.x - c.x) * inv * 420;
+          s.vy += (s.y - c.y) * inv * 420;
+          s.x = c.x + (s.x - c.x) * inv * (c.r + s.t.radius + 2);
+          s.y = c.y + (s.y - c.y) * inv * (c.r + s.t.radius + 2);
+          if (c.boss && s.rockT <= 0) {
+            s.rockT = 0.6;
+            damageShip(W, s, 180, null);
+          }
+        }
+      }
+    }
+  }
+  // docking: your own carrier is a safe harbour — park, refit, breathe
+  function dockShip(W, s) {
+    if (s.dead || s.docked || !s.team) return false;
+    const c = W.motherships && W.motherships[s.team];
+    if (!c || c.dead) return false;
+    if (hyp(c.x - s.x, c.y - s.y) > c.r + 190) return false;
+    s.docked = c.id;
+    s.vx = 0; s.vy = 0; s.safe = 1e9;
+    ev(W, { e: 'dock', id: s.id, cap: c.id, x: s.x, y: s.y });
+    return true;
+  }
+  function undockShip(W, s) {
+    if (!s.docked) return false;
+    const c = (W.capitals || []).find(k => k.id === s.docked);
+    s.docked = 0;
+    s.safe = W.opts.safeTime == null ? 2.5 : W.opts.safeTime;
+    if (c) {
+      const a = c.angle + Math.PI / 2 * (Math.random() < 0.5 ? 1 : -1);
+      s.x = c.x + Math.cos(a) * (c.r + 60);
+      s.y = c.y + Math.sin(a) * (c.r + 60);
+      s.angle = a;
+      s.vx = c.vx; s.vy = c.vy;
+    }
+    ev(W, { e: 'undock', id: s.id, x: s.x, y: s.y });
+    return true;
   }
 
   // pirates: hostile to every squad, worth a bounty, and they do not despawn
@@ -1233,6 +1468,15 @@
         damageShip(W, s, dmg, owner);
       }
     }
+    // bombs are how you actually crack a capital
+    if (W.capitals) {
+      for (const c of W.capitals) {
+        if (c.dead) continue;
+        if (!c.boss && c.team && owner && owner.team === c.team) continue;
+        const d = hyp(c.x - x, c.y - y);
+        if (d < R + c.r) damageCapital(W, c, base * (1 - clamp((d - c.r) / R, 0, 1) * 0.7), owner);
+      }
+    }
   }
 
   // ------------------------------------------------------------ AI
@@ -1363,6 +1607,22 @@
 
   // ------------------------------------------------------------ ship update
   function updateShip(W, s, dt) {
+    // docked: parked inside your carrier's bay, safe, refitting fast
+    if (s.docked) {
+      const c = (W.capitals || []).find(k => k.id === s.docked);
+      if (!c || c.dead) { s.docked = 0; }
+      else {
+        s.x = c.x - Math.cos(c.angle) * c.r * 0.35;
+        s.y = c.y - Math.sin(c.angle) * c.r * 0.35;
+        s.angle = c.angle;
+        s.vx = c.vx; s.vy = c.vy;
+        s.energy = Math.min(s.maxEnergy, s.energy + s.recharge * 4 * dt);
+        s.safe = 1e9;
+        if (s.gunCd > 0) s.gunCd -= dt;
+        if (s.bombCd > 0) s.bombCd -= dt;
+        return;
+      }
+    }
     if (s.dead) {
       if (!s.remote && !s.dormant) {
         s.respawn -= dt;
@@ -1525,11 +1785,22 @@
           else { ev(W, { e: 'bhit', x: b.x, y: b.y }); dead = true; break; }
         } else b.y = by;
         for (const s of W.ships) {
-          if (s.dead || s === b.owner) continue;
+          if (s.dead || s === b.owner || s.docked) continue;
           if (s.team && b.owner && s.team === b.owner.team) continue; // pass through teammates
           if (hyp(s.x - b.x, s.y - b.y) < s.t.radius + 3) {
             damageShip(W, s, b.dmg, b.owner);
             dead = true; break;
+          }
+        }
+        // capital hulls are enormous targets — and enormous cover
+        if (!dead && W.capitals) {
+          for (const c of W.capitals) {
+            if (c.dead || c === b.owner) continue;
+            if (!c.boss && c.team && b.owner && b.owner.team === c.team) continue;
+            if (hyp(c.x - b.x, c.y - b.y) < c.r) {
+              damageCapital(W, c, b.dmg, b.owner);
+              dead = true; break;
+            }
           }
         }
       }
@@ -1739,6 +2010,7 @@
     wl.length = 0;
     for (const o of W.ships) if (!o.dead && o.team && o.type === 'warden') wl.push(o);
     for (const s of W.ships) updateShip(W, s, dt);
+    updateCapitals(W, dt);
     updateBullets(W, dt);
     updateBombs(W, dt);
   }
@@ -1754,6 +2026,7 @@
     clamp, rand, irand, pick, angleNorm, mulberry32,
     tileSolid, solidAtPx, rectSolid, losClear, randClearPoint, findSpawn, findClearNear, rockAt,
     quadOf, terrOwner, evActive, showerRockAt, EV_LEAD, spawnMarauder, seedDeadZone,
+    CAPITALS, BOSS_KINDS, makeCapital, damageCapital, dockShip, undockShip,
     createWorld, makeShip, removeShip, spawnShip, addBots,
     applyLoadoutDefaults, applyPrize, addPrize, removePrizeById,
     fireGun, fireBomb, doRepel, doBurst, fireRocket, doBlink, warpToBeacon,
@@ -2980,6 +3253,41 @@
         case 'raider':
           say('A marauder pack warps in — kill them for their bounty.', '#f96');
           break;
+        case 'caphit':
+          spark(e.x + rand(-40, 40), e.y + rand(-40, 40), 30, 5, 190);
+          break;
+        case 'capgun':
+          sndShoot(e.x, e.y, 3);
+          flash(e.x, e.y, 34, 205);
+          break;
+        case 'dock':
+          if (mine) { banner('DOCKED', 'refitting aboard the carrier — G to launch', 2.4); sndPrize(); }
+          break;
+        case 'undock':
+          if (mine) say('Launched from the carrier.', '#8df');
+          break;
+        case 'capspawn':
+          say('A ' + e.label + ' has returned to the deep.', '#f96');
+          break;
+        case 'capkill': {
+          // a capital dying is a real spectacle
+          boomFX(e.x, e.y, 300, e.team ? 200 : 20, true);
+          for (let i = 0; i < 10; i++) {
+            const a = rand(0, TAU), rr = rand(40, 220);
+            G.waves.push({ x: e.x + Math.cos(a) * rr, y: e.y + Math.sin(a) * rr, r: 6, maxR: 150, t: 0, dur: 0.6, hue: 30 });
+          }
+          G.shake = Math.max(G.shake, 26);
+          say(e.label + ' destroyed!', '#ff8');
+          if (G.mmo && e.loot && G.player && !G.player.dead &&
+              Math.hypot(e.x - G.player.x, e.y - G.player.y) < 3000) {
+            G.credits += e.loot.c;
+            G.relics += e.loot.r;
+            saveMMO();
+            banner(e.label.toUpperCase() + ' DOWN', '+' + e.loot.c + ' credits · +' + e.loot.r + ' ◆ relic' + (e.loot.r > 1 ? 's' : ''), 3.4);
+            contractProgress('boss');
+          }
+          break;
+        }
         case 'boom':
           boomFX(e.x, e.y, 70 + 28 * e.level, 25, e.level >= 2);
           break;
@@ -3337,6 +3645,31 @@
       case 'terr':
         applyCapture(msg.qx, msg.qy, msg.team);
         break;
+      case 'caps':
+        // hull sync: position is already identical everywhere (closed-form)
+        if (W && W.capitals && Array.isArray(msg.h)) {
+          for (const row of msg.h) {
+            const c = W.capitals.find(k => k.id === row[0]);
+            if (c) { c.hp = row[1]; c.dead = !!row[2]; }
+          }
+        }
+        break;
+      case 'capgun':
+        sndShoot(msg.x, msg.y, 3);
+        flash(msg.x, msg.y, 34, 205);
+        break;
+      case 'capkill': {
+        const c = W && W.capitals && W.capitals.find(k => k.id === msg.cap);
+        if (c) { c.dead = true; c.hp = 0; }
+        handleEvents([{ e: 'capkill', cap: msg.cap, kind: msg.kind, x: msg.x, y: msg.y, team: msg.team, loot: msg.loot, label: msg.label }]);
+        break;
+      }
+      case 'capspawn': {
+        const c = W && W.capitals && W.capitals.find(k => k.id === msg.cap);
+        if (c) { c.dead = false; c.hp = c.maxHp; }
+        say('A ' + msg.label + ' has returned to the deep.', '#f96');
+        break;
+      }
       case 'relic-':
         if (W && W.relicSlots && W.relicSlots[msg.i]) W.relicSlots[msg.i].taken = W.time;
         break;
@@ -4498,6 +4831,101 @@
     return cached;
   }
 
+  // Capital sprite: the SAME heightmap → albedo → per-pixel lighting bake the
+  // fighters use, so a carrier reads as the same fleet, just enormous. Baked
+  // once nose-up and rotated at draw time (36 rotation frames of a 400px hull
+  // would be tens of megabytes), with the bake resolution capped so the
+  // biggest dreadnought still costs less than a megabyte.
+  function capitalSprite(kind, hue) {
+    const key = 'cap:' + kind + ':' + Math.round(hue);
+    let cached = atlasCache.get(key);
+    if (cached) return cached;
+    const t = SIM.CAPITALS[kind];
+    const bakeR = Math.min(t.radius, 132);          // draw-time upscale past this
+    const r0 = bakeR * 1.5;
+    const cell = Math.ceil(r0 * 2 * 1.4) + 12;
+    const SS = 2;
+    const cs = cell * SS, r = r0 * SS;
+    const doc = GLOBAL.document;
+    const mk = () => { const c = doc.createElement('canvas'); c.width = c.height = cs; return c; };
+    const hC = mk(), aC = mk(), fC = mk(), sC = mk();
+    const hctx = hC.getContext('2d'), actx2 = aC.getContext('2d');
+    const fctx = fC.getContext('2d'), sctx = sC.getContext('2d');
+    paintHeight(hctx, t, r, 0, cs);
+    try {
+      sctx.setTransform(1, 0, 0, 1, 0, 0);
+      sctx.clearRect(0, 0, cs, cs);
+      sctx.drawImage(hC, 0, 0);
+      hctx.setTransform(1, 0, 0, 1, 0, 0);
+      hctx.clearRect(0, 0, cs, cs);
+      hctx.filter = 'blur(' + (SS * 0.9) + 'px)';
+      hctx.drawImage(sC, 0, 0);
+      hctx.filter = 'none';
+    } catch (e) { }
+    paintAlbedo(actx2, t, hue, r, 0, cs);
+    lightCompose(fctx, hctx.getImageData(0, 0, cs, cs), actx2.getImageData(0, 0, cs, cs), cs);
+    const out = doc.createElement('canvas');
+    out.width = out.height = cell;
+    out.getContext('2d').drawImage(fC, 0, 0, cs, cs, 0, 0, cell, cell);
+    cached = { c: out, cell, scale: t.radius / bakeR };
+    atlasCache.set(key, cached);
+    return cached;
+  }
+
+  function drawCapital(c) {
+    const t = c.t;
+    const span = c.r * 1.6;
+    if (c.x < camL - span || c.x > camR + span || c.y < camT - span || c.y > camB + span) return;
+    const F = c.team ? SIM.FACTIONS[c.team] : null;
+    const hue = F ? F.hue : (t.hue == null ? 350 : t.hue);
+    const spr = capitalSprite(c.kind, hue);
+    const drawn = spr.cell * spr.scale;
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    // engine glow + hull aura before the hull itself
+    ctx.globalCompositeOperation = 'lighter';
+    drawGlow(0, 0, c.r * 1.9, hue, c.boss ? 0.24 : 0.18);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.rotate(c.angle);
+    // engine wash out the back
+    ctx.globalCompositeOperation = 'lighter';
+    const pu = 0.7 + 0.3 * Math.sin(G.time * 2.4 + c.id);
+    for (const en of t.engines)
+      drawGlow(en[0] * c.r, en[1] * c.r, c.r * 0.30 * pu, c.boss ? 12 : 20, 0.5);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(spr.c, -drawn / 2, -drawn / 2, drawn, drawn);
+    // hit flash
+    if (c.hitT > 0) {
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = clamp(c.hitT / 0.12, 0, 1) * 0.5;
+      ctx.drawImage(spr.c, -drawn / 2, -drawn / 2, drawn, drawn);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    // running lights down the flanks
+    for (let i = 0; i < 8; i++) {
+      const lx = (-0.82 + i * 0.22) * c.r;
+      const on = Math.sin(G.time * 2.6 + i * 0.9 + c.id) > 0;
+      ctx.fillStyle = on ? 'hsla(' + hue + ',95%,72%,0.95)' : 'rgba(60,70,92,0.5)';
+      const ly = (0.30 - Math.abs(i - 3.5) * 0.03) * c.r;
+      ctx.fillRect(lx, ly, 3, 3);
+      ctx.fillRect(lx, -ly, 3, 3);
+    }
+    ctx.restore();
+
+    // nameplate + hull bar
+    const dead = c.dead;
+    if (!dead) {
+      const nm = (F ? F.name.split(' ')[0] + ' ' : '') + t.label.toUpperCase();
+      txt(nm, c.x, c.y - c.r - 22, 12, c.boss ? 'rgba(255,150,120,0.9)' : 'rgba(150,200,255,0.85)', 'center', 800);
+      const bw = c.r * 1.3, frac = clamp(c.hp / c.maxHp, 0, 1);
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(c.x - bw / 2, c.y - c.r - 16, bw, 5);
+      ctx.fillStyle = c.boss ? 'hsla(' + (10 + 40 * frac) + ',90%,58%,0.95)' : 'hsla(200,85%,60%,0.9)';
+      ctx.fillRect(c.x - bw / 2, c.y - c.r - 16, bw * frac, 5);
+    }
+  }
+
   function drawShip(s) {
     if (s.dead) return;
     if (s.x < camL - 60 || s.x > camR + 60 || s.y < camT - 60 || s.y > camB + 60) return;
@@ -4648,14 +5076,8 @@
     camL = G.cam.x - vw / 2 - 90; camR = G.cam.x + vw / 2 + 90;
     camT = G.cam.y - vh / 2 - 90; camB = G.cam.y + vh / 2 + 90;
 
-    // faction motherships anchored in their fortress keeps
-    if (W.motherships) {
-      for (const tk2 in W.motherships) {
-        const ms = W.motherships[tk2];
-        if (ms.x > camL - 300 && ms.x < camR + 300 && ms.y > camT - 300 && ms.y < camB + 300)
-          drawMothership(ms);
-      }
-    }
+    // capital ships: squad carriers under way, and the hostile leviathans
+    if (W.capitals) for (const c of W.capitals) if (!c.dead) drawCapital(c);
 
     // THE MAELSTROM: storm boundary, flying rock, wormholes
     if (W.danger) {
@@ -5014,50 +5436,6 @@
     return name;
   }
 
-  // the mothership: a capital-ship anchor at the heart of a squad's
-  // fortress — drawn by hand, facing the war
-  function drawMothership(ms) {
-    const F = SIM.FACTIONS[ms.team];
-    const ang = Math.atan2(WORLD / 2 - ms.y, WORLD / 2 - ms.x);
-    ctx.save();
-    ctx.translate(ms.x, ms.y);
-    ctx.globalCompositeOperation = 'lighter';
-    drawGlow(0, 0, 260, F.hue, 0.22);
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.rotate(ang);
-    const hull = [[190, 0], [150, 26], [60, 58], [-120, 46], [-172, 22], [-172, -22], [-120, -46], [60, -58], [150, -26]];
-    ctx.beginPath();
-    hull.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
-    ctx.closePath();
-    ctx.fillStyle = '#1c2230';
-    ctx.fill();
-    ctx.strokeStyle = 'hsla(' + F.hue + ',70%,55%,0.6)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    // faction stripe + spine
-    ctx.fillStyle = 'hsla(' + F.hue + ',65%,45%,0.5)';
-    ctx.fillRect(-150, -8, 300, 16);
-    ctx.strokeStyle = 'rgba(150,175,220,0.25)';
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(-165, 0); ctx.lineTo(185, 0); ctx.stroke();
-    // bridge dome
-    ctx.fillStyle = 'rgba(140,220,255,0.5)';
-    ctx.beginPath(); ctx.arc(80, 0, 13, 0, TAU); ctx.fill();
-    // running lights blink down the flanks
-    for (let i = 0; i < 7; i++) {
-      const lx = -150 + i * 45;
-      const on = Math.sin(G.time * 3 + i * 1.1) > 0;
-      ctx.fillStyle = on ? 'hsla(' + F.hue + ',95%,70%,0.95)' : 'rgba(70,80,100,0.5)';
-      ctx.fillRect(lx, -40 + Math.abs(i - 3) * 4, 3, 3);
-      ctx.fillRect(lx, 37 - Math.abs(i - 3) * 4, 3, 3);
-    }
-    // engine bloom
-    const pu = 0.6 + 0.4 * Math.sin(G.time * 2.2);
-    ctx.globalCompositeOperation = 'lighter';
-    for (const ey of [-26, 0, 26]) drawGlow(-185, ey, 26 * pu, 18, 0.5);
-    ctx.restore();
-  }
-
   // CONTACT markers + hunt compass: encounters are events, and deep space
   // always offers a heading toward the next one
   function drawContacts() {
@@ -5137,6 +5515,41 @@
       txt('¢ ' + G.credits + '  ·  ◆ ' + G.relics + '  ·  U bay · J board', 20, narrow ? 104 : 126, narrow ? 10 : 12, '#fd8', 'left', 700);
       drawContracts(narrow);
       if (G.upgOpen) drawUpgradeBay();
+    }
+
+    // BOSS ENGAGEMENT: the nearest hostile capital in range takes over the
+    // top of the screen with a proper health bar
+    if (G.W.capitals && !p.dead) {
+      let boss = null, bd = 2600;
+      for (const c of G.W.capitals) {
+        if (!c.boss || c.dead) continue;
+        const d = Math.hypot(c.x - p.x, c.y - p.y);
+        if (d < bd) { bd = d; boss = c; }
+      }
+      if (boss) {
+        const bw = Math.min(560, vw - 60), bx = vw / 2 - bw / 2, by = narrow ? 92 : 44;
+        const frac = clamp(boss.hp / boss.maxHp, 0, 1);
+        panel(bx - 6, by - 6, bw + 12, 30);
+        ctx.fillStyle = 'rgba(255,255,255,0.07)';
+        ctx.fillRect(bx, by + 10, bw, 10);
+        ctx.fillStyle = 'hsla(' + (8 + 34 * frac) + ',90%,55%,0.95)';
+        ctx.fillRect(bx, by + 10, bw * frac, 10);
+        // tier pips so you know what you picked a fight with
+        let pips = '';
+        for (let i = 0; i < (boss.t.tier || 1); i++) pips += '◆';
+        txt(pips + ' ' + boss.t.label.toUpperCase(), bx, by + 6, 12, '#fca', 'left', 800);
+        txt(Math.ceil(boss.hp).toLocaleString() + ' / ' + boss.maxHp.toLocaleString(), bx + bw, by + 6, 11, '#c99', 'right', 700);
+      }
+    }
+
+    // docking prompt / status
+    if (!p.dead && G.player.team && G.W.motherships) {
+      const car = G.W.motherships[G.player.team];
+      if (p.docked) {
+        txt('DOCKED — G to launch', vw / 2, vh - 96, 15, '#8fd', 'center', 800);
+      } else if (car && !car.dead && Math.hypot(car.x - p.x, car.y - p.y) < car.r + 190) {
+        txt('G — dock with the carrier', vw / 2, vh - 96, 13, 'rgba(150,230,255,0.85)', 'center', 700);
+      }
     }
 
     // inside the maelstrom the screen itself feels hostile
@@ -5381,16 +5794,22 @@
     ctx.lineTo(rx + R / 2 + Math.cos(swa) * R / 2, ry + R / 2 + Math.sin(swa) * R / 2);
     ctx.stroke();
     const on = (x, y) => x >= wx && x <= wx + RW && y >= wy && y <= wy + RW;
-    // motherships paint as faction diamonds
-    if (G.W.motherships) {
-      for (const tk2 in G.W.motherships) {
-        const ms = G.W.motherships[tk2];
-        if (!on(ms.x, ms.y)) continue;
+    // capitals paint as diamonds — faction colors for carriers, a pulsing
+    // red for the hostile leviathans worth hunting
+    if (G.W.capitals) {
+      for (const c of G.W.capitals) {
+        if (c.dead || !on(c.x, c.y)) continue;
         ctx.save();
-        ctx.translate(rx + (ms.x - wx) * k, ry + (ms.y - wy) * k);
+        ctx.translate(rx + (c.x - wx) * k, ry + (c.y - wy) * k);
         ctx.rotate(Math.PI / 4);
-        ctx.fillStyle = 'hsla(' + SIM.FACTIONS[ms.team].hue + ',90%,62%,0.95)';
-        ctx.fillRect(-3, -3, 6, 6);
+        if (c.boss) {
+          const a = 0.55 + 0.45 * Math.sin(G.time * 5 + c.id);
+          ctx.fillStyle = 'rgba(255,90,70,' + a.toFixed(2) + ')';
+          ctx.fillRect(-4, -4, 8, 8);
+        } else {
+          ctx.fillStyle = 'hsla(' + SIM.FACTIONS[c.team].hue + ',90%,62%,0.95)';
+          ctx.fillRect(-3, -3, 6, 6);
+        }
         ctx.restore();
       }
     }
@@ -5843,6 +6262,7 @@
     { k: 'relic', n: 'Recovery', d: n => 'recover ' + n + ' relic' + (n > 1 ? 's' : ''), min: 1, max: 2, pay: 260 },
     { k: 'survey', n: 'Survey', d: n => 'chart ' + n + ' different quadrants', min: 3, max: 6, pay: 55 },
     { k: 'hold', n: 'Conquest', d: n => 'help take ' + n + ' quadrant' + (n > 1 ? 's' : ''), min: 1, max: 2, pay: 200 },
+    { k: 'boss', n: 'Leviathan Hunt', d: n => 'destroy ' + n + ' capital ship' + (n > 1 ? 's' : ''), min: 1, max: 2, pay: 700 },
   ];
   function rollContract() {
     // squadless pilots can't take ground, so never hand them a Conquest
@@ -6130,7 +6550,7 @@
 
   const HANDLED = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab',
     'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'Enter', 'Backspace', 'Escape',
-    'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyB', 'KeyE', 'KeyQ', 'KeyR', 'KeyT', 'KeyM', 'KeyN', 'KeyP', 'KeyF', 'KeyO', 'KeyU', 'KeyJ']);
+    'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyB', 'KeyE', 'KeyQ', 'KeyR', 'KeyT', 'KeyM', 'KeyN', 'KeyP', 'KeyF', 'KeyO', 'KeyU', 'KeyJ', 'KeyG']);
 
   function onKeyDown(e) {
     audioInit();
@@ -6192,6 +6612,12 @@
     }
     if (code === 'KeyJ' && G.mmo && G.state === 'play' && !G.chatOpen) {
       G.boardOpen = !G.boardOpen;
+      e.preventDefault();
+      return;
+    }
+    if (code === 'KeyG' && G.state === 'play' && !G.chatOpen && G.player) {
+      if (G.player.docked) SIM.undockShip(G.W, G.player);
+      else if (!SIM.dockShip(G.W, G.player)) say('No carrier in docking range.', '#f88');
       e.preventDefault();
       return;
     }

@@ -224,6 +224,40 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     console.log('OK  war economy: capture, relics, caches, wing escort, events, marauders');
   }
 
+  // capital ships: carriers under way, bosses that fight back and drop loot
+  {
+    const Wk = SIM.createWorld({ seed: 8, authority: true, spawnPrizes: true });
+    assert(Wk.capitals.length >= 7, 'carriers and boss capitals exist (' + Wk.capitals.length + ')');
+    assert([1, 2, 3, 4].every(t => Wk.motherships[t] && !Wk.motherships[t].boss), 'each squad has a carrier');
+    const tiers = Wk.capitals.filter(c => c.boss).map(c => c.t.tier).sort();
+    assert(tiers.includes(1) && tiers.includes(2) && tiers.includes(3), 'bosses span the difficulty range');
+    // carriers move
+    const car = Wk.motherships[1];
+    const cx0 = car.x, cy0 = car.y;
+    for (let i = 0; i < 8 * 60; i++) SIM.updateWorld(Wk, SIM.STEP);
+    assert(Math.hypot(car.x - cx0, car.y - cy0) > 100, 'the carrier is under way, not parked');
+    // a boss soaks real damage and pays out
+    const boss = Wk.capitals.find(c => c.kind === 'reaver');
+    const hunter = SIM.makeShip(Wk, 'corsair', 'local', 'Hunter', null, 1);
+    SIM.spawnShip(Wk, hunter);
+    SIM.drainEvents(Wk);
+    SIM.damageCapital(Wk, boss, 100, hunter);
+    assert(boss.hp === boss.maxHp - 100 && SIM.drainEvents(Wk).some(e => e.e === 'caphit'), 'capitals take damage');
+    SIM.damageCapital(Wk, boss, boss.maxHp, hunter);
+    const kill = SIM.drainEvents(Wk).find(e => e.e === 'capkill');
+    assert(kill && kill.loot && kill.loot.c > 0 && kill.loot.r > 0, 'a dead boss drops credits and relics');
+    assert(boss.dead && boss.respawnT > 0, 'bosses respawn on a timer');
+    // docking: safe harbour aboard your own carrier
+    hunter.x = car.x; hunter.y = car.y; hunter.energy = 50; hunter.dead = false;
+    assert(SIM.dockShip(Wk, hunter), 'a pilot can dock with their own carrier');
+    for (let i = 0; i < 90; i++) SIM.updateWorld(Wk, SIM.STEP);
+    assert(hunter.energy > 400, 'docked ships refit fast (' + Math.round(hunter.energy) + ')');
+    assert(Math.hypot(hunter.x - car.x, hunter.y - car.y) < 200, 'a docked ship rides with the carrier');
+    assert(SIM.undockShip(Wk, hunter) && !hunter.docked, 'and can launch again');
+    SIM.drainEvents(Wk);
+    console.log('OK  capitals: carriers under way, docking, boss tiers, damage + loot');
+  }
+
   // bomb identity: ricochet is a HULL TRAIT, and the fuse is generous
   {
     const Wb = SIM.createWorld({ seed: 21 });
