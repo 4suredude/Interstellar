@@ -294,7 +294,7 @@ for (let i = 0; i < 60; i++) {
 SIM.drainEvents(W);
 
 // ---------------------------------------------------------------- pilot db
-const DATA_DIR = path.join(ROOT, 'data');
+const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
 const PLAYERS_FILE = path.join(DATA_DIR, 'players.json');
 // null-prototype DB so a pilot named "__proto__"/"constructor" can't reach
 // Object.prototype and poison every stat write in the process
@@ -312,6 +312,21 @@ function pdbSave() {
   }, 3000);
 }
 const PDB_CAP = 5000;
+
+// ---- callsign registration ----
+// A callsign is an identity: elo, duel record, lifetime stats. Until now it
+// was honor-system — anyone could join as any name and inherit (or wreck)
+// its ladder standing. Now the first pilot to fly a name is issued a random
+// 128-bit token; the PDB stores only its sha256, and later joins claiming
+// that name without the token are refused. Names already in the PDB from
+// the honor-system era are grandfathered to their next claimant.
+const hashSec = tok => crypto.createHash('sha256').update(String(tok)).digest('hex');
+function secMatches(stored, offered) {
+  if (typeof offered !== 'string' || offered.length > 128) return false;
+  const a = Buffer.from(stored, 'hex'), b = Buffer.from(hashSec(offered), 'hex');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 function pilot(name) {
   const key = name.toLowerCase();
   let p = PDB[key];
@@ -639,8 +654,27 @@ function onMessage(cl, msg) {
       if (cl.joined) return;
       if (!HAS.call(SIM.SHIP_TYPES, msg.ship)) return;   // reject __proto__ etc.
       cl.name = sanitizeName(msg.name);
+      // a registered callsign belongs to whoever holds its token — check
+      // BEFORE the online-duplicate suffix, so an impostor can't dodge the
+      // lock by colliding with the owner and pivoting to a fresh name
+      {
+        const reg = PDB[cl.name.toLowerCase()];
+        if (reg && reg.sec && !secMatches(reg.sec, msg.sec)) {
+          sendTo(cl, { t: 'deny', why: 'name', text: 'Callsign "' + cl.name + '" is registered to another pilot.' });
+          log('join refused: ' + cl.name + ' (registered callsign, wrong/missing token)');
+          return;
+        }
+      }
       if (findClientByName(cl.name)) cl.name = cl.name.slice(0, 11) + '.' + ((Math.random() * 90 + 10) | 0);
       cl.pilot = pilot(cl.name);
+      // first flight under this name (or a legacy honor-system record):
+      // mint its token now. Only the hash survives here — the one clear-text
+      // copy rides the welcome to its owner.
+      let mintedSec = '';
+      if (!cl.pilot.sec) {
+        mintedSec = crypto.randomBytes(16).toString('hex');
+        cl.pilot.sec = hashSec(mintedSec);
+      }
       const team = pickTeam();
       const ghost = SIM.makeShip(W, msg.ship, 'remote', cl.name, null, team);
       const hue = ghost.hue;   // ship-identity color
@@ -651,6 +685,9 @@ function onMessage(cl, msg) {
       cl.joined = true;
       sendTo(cl, {
         t: 'welcome', id: cl.id, hue, seed: SEED, team, goal: GOAL, mode: MODE,
+        // name echoes back because a duplicate-online join gets suffixed —
+        // the client must store the token under the name it actually holds
+        name: cl.name, sec: mintedSec || undefined,
         style: MAPSTYLE, flip: SIDES, wt: Math.round(W.time * 100) / 100,
         ta: tk[1], tb: tk[2], ca: corePts[1], cb: corePts[2],
         me: { elo: Math.round(cl.pilot.elo), dw: cl.pilot.dw, dl: cl.pilot.dl },

@@ -103,6 +103,20 @@ fortress quadrants*, and the deep belts. **Upgrades are permanent**: they
 survive death and are saved between sessions. Match modes (Duel, Squad,
 Core) stay classic — pure skill, greens and all.
 
+**Finds: the rarity ladder.** Layered over the credit economy, **modules**
+drop from the things you already fight — derelict caches, marauders, and
+every boss kill — in four tiers: <ins>common</ins> green, **rare** blue,
+**epic** purple, **legendary** orange. A module is a permanent stat package
+(Afterburner, Capacitor Bank, Recharge Coil, Autoloader, Warhead Pack,
+Deflector Plate, Prox Trigger, Salvage Scoop); rarity multiplies it and a
+power roll keeps two drops of the same tier from being identical. You fly
+three **mounts**, one per module type — press `I` for the hold, fit and
+unfit freely, scrap the rest for credits. The Dreadnought's first drop is
+**always a legendary**, and a legendary on the field throws a beacon of
+light you can see from a fight away.
+
+![Loot drops](assets/loot.png)
+
 **The Dead Zone.** One edge quadrant belongs to nobody and never will:
 marauder country, relic-rich, storm-scored on the soundtrack. High risk,
 highest reward.
@@ -161,10 +175,13 @@ with instant rematch on Enter.
 
 ## The competitive spine (online)
 
-- **Your callsign is your identity.** The server persists every pilot's Elo,
-  duel record, kills/deaths, accuracy, and score in `data/players.json` —
-  shown on the connect screen, in `/stats` chat, and on the web ladder at
-  `http://server:8666/stats`.
+- **Your callsign is your identity — and it's registered.** The first
+  flight under a name mints a random 128-bit token; the client keeps it,
+  the server keeps only its hash, and later joins claiming that name
+  without the token are refused. The server persists every pilot's Elo,
+  duel record, kills/deaths, accuracy, and score in `data/players.json`
+  (`DATA_DIR` overrides the location) — shown on the connect screen, in
+  `/stats` chat, and on the web ladder at `http://server:8666/stats`.
 - **Duel ladder**: type `/duel <name>` in chat; they type `/accept`. Both of
   you warp to the center arena, first to 5 (any death counts). The zone
   watches the score line by line, and the result — with Elo changes — is
@@ -354,7 +371,7 @@ A new generation of hulls joins the fleet — each with a mechanic all its own:
 | `Enter` | Chat (online) — `/duel` `/accept` `/stats` `/votemap` `/help`, `//` for team |
 | `P` / `Esc` | Pause / menu |
 | `K` | **Rebind controls** — every key above is remappable |
-| `U` / `J` | Upgrade bay / contract board (The Zone and online) |
+| `U` / `J` / `I` | Upgrade bay / contract board / module hold (The Zone) |
 | `G` | Dock with / launch from your squad's carrier |
 | `M` | Mute all · `N` Music on/off · `F` Fullscreen |
 
@@ -416,12 +433,9 @@ Ordered by what actually blocks what, from a full review of the codebase.
 
 ### Near term — correctness and trust
 
-- **Pilot authentication.** Callsigns are honor-system identity: anyone can
-  join as any name, so the Elo ladder and lifetime stats are forgeable. The
-  fix is small and zero-dependency — the server mints a secret per new
-  callsign, the client stores it, joins with a claimed name and no matching
-  secret are rejected. This is the one prerequisite for taking the ladder
-  public.
+- **Online module drops.** Loot currently drops in Zone worlds (the solo
+  MMO); the online zone needs a drop+/loot relay with the same proximity
+  validation the relic path already uses.
 - **Live boss hull sync.** Online, capital hull points ride a 5-second
   `caps` broadcast, so a squad boss fight watches the bar snap rather than
   drain. Piggyback hp deltas on the existing `caphit` relay (or tighten the

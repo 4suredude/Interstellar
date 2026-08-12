@@ -590,6 +590,7 @@
       byId: new Map(),
       nextId: 1, nextPrizeId: 1, nextCapId: 1,
       capitals: [], motherships: {}, fortress: {},
+      drops: [], nextDropId: 1,
     };
     genMap(W);
     genDanger(W);
@@ -827,6 +828,65 @@
     };
   }
 
+  // ------------------------------------------------------------ loot drops
+  // MMO-style finds layered over the credit economy: modules drop from the
+  // things you already fight and crack, in four rarity tiers — the classic
+  // green / blue / purple / orange ladder. A module is a permanent stat
+  // package; rarity multiplies it, and a power roll keeps two drops of the
+  // same tier from being identical. Drops exist only in Zone worlds — match
+  // modes stay classic, and the online relay is a roadmap item.
+  const RARITIES = [
+    { k: 'common', label: 'COMMON', hue: 130, mul: 1.0, scrap: 40 },
+    { k: 'rare', label: 'RARE', hue: 210, mul: 1.6, scrap: 150 },
+    { k: 'epic', label: 'EPIC', hue: 280, mul: 2.4, scrap: 500 },
+    { k: 'legendary', label: 'LEGENDARY', hue: 30, mul: 3.5, scrap: 1600 },
+  ];
+  const MODULES = [
+    { k: 'burner', name: 'Afterburner', stat: 'thrust + speed', base: 5 },
+    { k: 'cap', name: 'Capacitor Bank', stat: 'max energy', base: 6 },
+    { k: 'coil', name: 'Recharge Coil', stat: 'recharge', base: 7 },
+    { k: 'loader', name: 'Autoloader', stat: 'gun damage', base: 5 },
+    { k: 'warhead', name: 'Warhead Pack', stat: 'bomb damage', base: 7 },
+    { k: 'deflect', name: 'Deflector Plate', stat: 'damage taken', base: -4 },
+    { k: 'trigger', name: 'Prox Trigger', stat: 'bomb fuse radius', base: 10 },
+    { k: 'scoop', name: 'Salvage Scoop', stat: 'salvage credits', base: 12 },
+  ];
+  // weights are [common, rare, epic, legendary] — bosses never drop grey-tier
+  const DROP_TABLES = {
+    cache: [70, 24, 5.5, 0.5],
+    marauder: [55, 33, 10, 2],
+    carrier: [0, 55, 40, 5],
+    reaver: [0, 60, 33, 7],
+    leviathan: [0, 30, 55, 15],
+    dreadnought: [0, 20, 60, 20],
+  };
+  function rollDrop(W, table, forceRar) {
+    const w = DROP_TABLES[table] || DROP_TABLES.cache;
+    let rar = forceRar == null ? 0 : forceRar;
+    if (forceRar == null) {
+      const total = w[0] + w[1] + w[2] + w[3];
+      let r = W.rng() * total;
+      for (let i = 0; i < 4; i++) { r -= w[i]; if (r <= 0) { rar = i; break; } }
+    }
+    return {
+      kind: MODULES[(W.rng() * MODULES.length) | 0].k,
+      rar,
+      p: 0.85 + W.rng() * 0.3,      // power roll: same tier, different find
+    };
+  }
+  function lootOn(W) { return W.opts.zoneWorld && W.opts.spawnPrizes; }
+  function dropAt(W, x, y, table, forceRar) {
+    if (!lootOn(W)) return null;
+    const d = rollDrop(W, table, forceRar);
+    d.id = W.nextDropId++;
+    d.x = x + rand(-24, 24); d.y = y + rand(-24, 24);
+    d.born = W.time;
+    W.drops.push(d);
+    ev(W, { e: 'drop+', drop: d.id, x: d.x, y: d.y, rar: d.rar });
+    return d;
+  }
+  const DROP_TTL = 150, DROP_TTL_LEG = 400;   // a legendary waits for you
+
   // ------------------------------------------------------------ capital sim
   function makeCapital(W, kind, team, x, y) {
     const t = CAPITALS[kind];
@@ -910,6 +970,17 @@
           const px = c.x + Math.cos(a) * rr, py = c.y + Math.sin(a) * rr;
           if (!solidAtPx(W, px, py)) addPrize(W, px, py);
         }
+      }
+      // ...and its modules. Tier decides the table; the dreadnought's first
+      // drop is a guaranteed legendary — cracking the hardest hull in the
+      // sector should never roll disappointment.
+      if (c.boss) {
+        const table = c.kind;
+        const n = c.kind === 'reaver' ? 1 : c.kind === 'leviathan' ? 2 : 3;
+        for (let i = 0; i < n; i++)
+          dropAt(W, c.x, c.y, table, c.kind === 'dreadnought' && i === 0 ? 3 : null);
+      } else {
+        dropAt(W, c.x, c.y, 'carrier');
       }
     }
   }
@@ -1155,7 +1226,7 @@
   }
 
   // ------------------------------------------------------------ weapons
-  function bulletDamage(s) { return (150 + 150 * s.gunLevel) * s.t.gunDmgMul; }
+  function bulletDamage(s) { return (150 + 150 * s.gunLevel) * s.t.gunDmgMul * (s.dmgMul || 1); }
 
   function gunShots(s) {
     const multi = s.multi && s.multiOn;
@@ -1227,7 +1298,7 @@
       bounces: s.t.bombBounce || 0,
       // a bomb you can't quite land is no fun: the fuse ring is generous
       // enough that a near miss still counts, and greens widen it a lot
-      prox: 30 + 9 * s.bombLevel + 28 * s.proxPlus,
+      prox: 30 + 9 * s.bombLevel + 28 * s.proxPlus + (s.modProx || 0),
       owner: s,
     };
     W.bombs.push(b);
@@ -1345,6 +1416,7 @@
     if (v.dead || v.safe > 0) return;
     if (att && att !== v && v.team && att.team === v.team) return; // no friendly fire
     if (v.t.armor) dmg *= v.t.armor;
+    if (v.armorMul) dmg *= v.armorMul;   // Deflector Plate modules
     ev(W, { e: 'hit', x: v.x, y: v.y, hue: v.hue, id: v.id, dmg, att: att ? att.id : 0 });
     if (v.remote) return; // their owner computes real damage
     v.energy -= dmg;
@@ -1368,6 +1440,8 @@
       vTeam: v.team, kTeam: att ? att.team : 0,
       kStreak: att && att !== v ? att.streak : 0,
     });
+    // a marauder's hoard: pirates carry what they've stolen
+    if (v.marauder && lootOn(W) && W.rng() < 0.35) dropAt(W, v.x, v.y, 'marauder');
     // local/bot worlds drop greens at the wreck; online, the server does this
     if (W.opts.spawnPrizes) {
       const drops = 2 + irand(2);
@@ -1380,7 +1454,8 @@
     applyLoadoutDefaults(v);
   }
   function explode(W, x, y, level, owner) {
-    const R = 70 + 28 * level, base = 500 + 220 * level;
+    const R = 70 + 28 * level;
+    const base = (500 + 220 * level) * (owner && owner.bombMul || 1);
     ev(W, { e: 'boom', x, y, level });
     for (const s of W.ships) {
       if (s.dead) continue;
@@ -1870,6 +1945,27 @@
 
     // relic + cache salvage: local human pilots only — bots have no use for
     // tech, and only the upgrade economy spends credits
+    // module drops: local human pilots collect by flying over; stale drops
+    // fade (a legendary waits much longer — it's an event, not litter)
+    if (W.drops.length) {
+      for (let i = W.drops.length - 1; i >= 0; i--) {
+        const d = W.drops[i];
+        if (W.time - d.born > (d.rar === 3 ? DROP_TTL_LEG : DROP_TTL)) {
+          ev(W, { e: 'drop-', drop: d.id });
+          W.drops.splice(i, 1);
+          continue;
+        }
+        for (const s of W.ships) {
+          if (s.dead || s.remote || s.bot || !s.noGreens) continue;
+          if (hyp(s.x - d.x, s.y - d.y) < 30 + s.t.radius) {
+            ev(W, { e: 'loot', id: s.id, kind: d.kind, rar: d.rar, p: d.p, x: d.x, y: d.y });
+            W.drops.splice(i, 1);
+            break;
+          }
+        }
+      }
+    }
+
     if (W.relicSlots) {
       for (const s of W.ships) {
         if (s.dead || s.remote || s.bot || !s.noGreens) continue;
@@ -1890,6 +1986,7 @@
             if (hyp(s.x - ch.x, s.y - ch.y) < 34 + s.t.radius) {
               ch.taken = W.time;
               ev(W, { e: 'cache', id: s.id, slot: i, x: ch.x, y: ch.y });
+              if (W.rng() < 0.22) dropAt(W, ch.x, ch.y, 'cache');
             }
           }
         }
@@ -1957,6 +2054,7 @@
     tileSolid, solidAtPx, rectSolid, losClear, randClearPoint, findSpawn, findClearNear, rockAt,
     quadOf, terrOwner, evActive, showerRockAt, EV_LEAD, spawnMarauder, seedDeadZone,
     CAPITALS, BOSS_KINDS, makeCapital, damageCapital, dockShip, undockShip,
+    RARITIES, MODULES, DROP_TABLES, rollDrop, dropAt,
     createWorld, makeShip, removeShip, spawnShip, addBots,
     applyLoadoutDefaults, applyPrize, addPrize, removePrizeById,
     fireGun, fireBomb, doRepel, doBurst, fireRocket, doBlink, warpToBeacon,

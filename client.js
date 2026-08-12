@@ -28,6 +28,7 @@
     // MMO layer: squad allegiance, credits, permanent upgrades, quadrant
     zoneTeam: 0, credits: 0, relics: 0, upg: {}, mmo: false, upgOpen: false, quad: '', quadIdx: -1, evtSeen: -1,
     contracts: [], charted: [],
+    hold: [], eqp: [], invOpen: false, invSel: 0, scoopMul: 1,
     ctlOpen: false, bindSel: 0, bindWait: false,
     mode: 'ffa', pendingMode: 'squad', match: null,
     banner: null, lastKillT: -99, combo: 0, duelW: 0, duelL: 0,
@@ -37,7 +38,7 @@
     // net
     net: null, netErr: '', myId: 0, name: '', nameStr: '', stateTick: 0, kaTimer: 0,
     chatOpen: false, chatStr: '',
-    zoneStatus: null, zoneMode: '', sideFlip: 0, duel: null, myElo: 0,
+    zoneStatus: null, zoneMode: '', sideFlip: 0, duel: null, myElo: 0, nameDeny: '',
     lastKillerId: 0, coreOwner: 0,
     shoot: null, shootT: 6,
   };
@@ -182,6 +183,13 @@
     } else if (G.state === 'error') {
       netConnect();   // tap anywhere retries
     } else if (G.state === 'play') {
+      if (G.invOpen && ui.inv) {
+        for (const r of ui.inv) if (inRect(r)) {
+          // first tap selects, second tap on the same row fits/unfits
+          if (G.invSel === r.i) invToggle(r.i); else G.invSel = r.i;
+          return;
+        }
+      }
       if (G.upgOpen && ui.upg) {
         for (const r of ui.upg) if (inRect(r)) { buyUpgrade(r.i); return; }
         G.upgOpen = false;
@@ -1292,15 +1300,35 @@
         }
         case 'green':
           if (mine && e.credit) {
-            G.credits += 12; saveMMO();
-            say('+12 credits (salvage)', '#fd8'); sndPrize();
+            const sc = Math.round(12 * G.scoopMul);
+            G.credits += sc; saveMMO();
+            say('+' + sc + ' credits (salvage)', '#fd8'); sndPrize();
             contractProgress('salvage');
           } else if (mine) { say('Green: ' + e.name, '#ff6'); sndPrize(); }
           break;
+        case 'loot': {
+          if (!(G.player && e.id === G.player.id)) break;
+          const it = { k: e.kind, r: e.rar, p: +(+e.p).toFixed(3) };
+          const R = SIM.RARITIES[it.r];
+          const over = holdAdd(it);
+          flash(e.x, e.y, 40 + it.r * 18, R.hue);
+          spark(e.x, e.y, R.hue, 10 + it.r * 8, 200);
+          if (it.r === 3) {
+            banner('LEGENDARY FIND', modLine(it), 3.4);
+            // musSwell wants an absolute context time to peak AT
+            if (SFX.ctx) try { musSwell(SFX.ctx.currentTime + 0.6); } catch (err) { }
+          }
+          say((it.r >= 2 ? R.label + ' — ' : '') + modLine(it) + '  ·  I to fit', modColor(it, 70));
+          if (over) say('Hold full — ' + modDef(over.scrapped.k).name + ' scrapped for ¢' + over.c, '#fd8');
+          tone('sine', 520 + it.r * 180, 900 + it.r * 260, 0.14, 0.2);
+          tone('sine', 780 + it.r * 270, 780 + it.r * 270, 0.2, 0.14, 0.07);
+          saveMMO();
+          break;
+        }
         case 'cache':
           spark(e.x, e.y, 45, 12, 170);
           if (mine) {
-            const c = 20 + irand(16);
+            const c = Math.round((20 + irand(16)) * G.scoopMul);
             G.credits += c; saveMMO();
             say('Derelict cache cracked — +' + c + ' credits', '#fd8');
             sndPrize();
@@ -1363,6 +1391,9 @@
     } catch (e) { G.zoneStatus = { err: 1 }; }
   }
   function netConnect() {
+    // a deny path leaves the old socket open behind the callsign screen —
+    // drop it silently or its close event would bounce us to the title
+    if (G.net) { G.online = false; try { G.net.close(); } catch (e) { } G.net = null; }
     G.state = 'connecting';
     G.netErr = '';
     let ws;
@@ -1460,6 +1491,10 @@
     switch (msg.t) {
       case 'welcome': {
         G.myId = msg.id;
+        // the server may have suffixed the name (double login); the token it
+        // minted belongs to the name it echoes, not the one we typed
+        if (typeof msg.name === 'string' && msg.name) G.name = msg.name;
+        if (typeof msg.sec === 'string' && msg.sec) saveKey(G.name, msg.sec);
         G.contacts.clear(); G.contactFx.length = 0;
         G.evtSeen = -1; G.quadIdx = -1; G.board = null;
         const team = msg.team || 0;
@@ -1644,6 +1679,13 @@
         if (msg.id === 0) { say('» ' + msg.text, '#fd8'); sndChat(); break; }
         say((msg.tc ? 'T· ' : '') + msg.name + '> ' + msg.text, msg.tc ? '#8fd4a8' : '#9cf');
         sndChat();
+        break;
+      }
+      case 'deny': {
+        // the join was refused (registered callsign, wrong/missing token) —
+        // back to the callsign screen with the reason on it
+        G.nameDeny = typeof msg.text === 'string' ? msg.text.slice(0, 90) : 'Join refused.';
+        G.state = 'nameentry';
         break;
       }
       case 'tscore': {
@@ -3341,6 +3383,38 @@
       ctx.globalCompositeOperation = 'source-over';
     }
 
+    // module drops: the rarity ladder in the world — green, blue, purple,
+    // and a legendary orange that throws a beacon you can see from a fight away
+    if (W.drops) for (const d of W.drops) {
+      if (d.x < camL - 60 || d.x > camR + 60 || d.y < camT - 200 || d.y > camB + 60) continue;
+      const R = SIM.RARITIES[d.rar];
+      const pu = 0.75 + 0.25 * Math.sin(G.time * 3.2 + d.id);
+      ctx.save();
+      ctx.translate(d.x, d.y);
+      ctx.globalCompositeOperation = 'lighter';
+      drawGlow(0, 0, (34 + d.rar * 16) * pu, R.hue, 0.4 + d.rar * 0.12);
+      if (d.rar === 3) {
+        // the beacon: a column of light, because a legendary is an event
+        const bg = ctx.createLinearGradient(0, -170, 0, 0);
+        bg.addColorStop(0, 'hsla(' + R.hue + ',95%,65%,0)');
+        bg.addColorStop(1, 'hsla(' + R.hue + ',95%,65%,' + (0.34 * pu).toFixed(3) + ')');
+        ctx.fillStyle = bg;
+        ctx.fillRect(-2.5, -170, 5, 170);
+      }
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.rotate(G.time * 1.8 + d.id);
+      const r0 = 7 + d.rar * 1.5;
+      ctx.beginPath();
+      ctx.moveTo(r0, 0); ctx.lineTo(0, r0); ctx.lineTo(-r0, 0); ctx.lineTo(0, -r0);
+      ctx.closePath();
+      ctx.strokeStyle = 'hsla(' + R.hue + ',95%,' + (62 + d.rar * 6) + '%,0.95)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.strokeStyle = 'hsla(' + R.hue + ',60%,85%,0.6)';
+      ctx.strokeRect(-r0 * 0.35, -r0 * 0.35, r0 * 0.7, r0 * 0.7);
+      ctx.restore();
+    }
+
     for (const p of W.prizes) {
       if (p.x < camL || p.x > camR || p.y < camT || p.y > camB) continue;
       const pulse = 0.75 + 0.25 * Math.sin(G.time * 4 + p.phase);
@@ -3611,9 +3685,10 @@
 
     // MMO layer: credits + the upgrade bay
     if (G.mmo) {
-      txt('¢ ' + G.credits + '  ·  ◆ ' + G.relics + '  ·  U bay · J board', 20, (narrow ? 104 : 126) + bossShift, narrow ? 10 : 12, '#fd8', 'left', 700);
+      txt('¢ ' + G.credits + '  ·  ◆ ' + G.relics + '  ·  U bay · J board · I hold', 20, (narrow ? 104 : 126) + bossShift, narrow ? 10 : 12, '#fd8', 'left', 700);
       drawContracts(narrow, bossShift);
       if (G.upgOpen) drawUpgradeBay();
+      if (G.invOpen) drawInventory();
     }
 
     {
@@ -3954,6 +4029,14 @@
       ctx.fillStyle = 'rgba(90,255,130,0.8)';
       ctx.fillRect(rx + (p.x - wx) * k - 1, ry + (p.y - wy) * k - 1, 2, 2);
     }
+    // module drops ping in their rarity color; a legendary blinks
+    if (G.W.drops) for (const d of G.W.drops) {
+      if (!on(d.x, d.y)) continue;
+      if (d.rar === 3 && (G.time * 3 | 0) % 2) continue;
+      ctx.fillStyle = 'hsla(' + SIM.RARITIES[d.rar].hue + ',95%,65%,0.95)';
+      const sz = d.rar >= 2 ? 3 : 2;
+      ctx.fillRect(rx + (d.x - wx) * k - sz / 2, ry + (d.y - wy) * k - sz / 2, sz, sz);
+    }
     for (const s of G.W.ships) {
       if (s.dead || !on(s.x, s.y)) continue;
       if (s === G.player) {
@@ -4081,6 +4164,87 @@
         y += narrow ? 13 : 15;
       }
     }
+  }
+
+  // selection index runs over equipped first, then hold
+  function invItem(i) {
+    return i < G.eqp.length
+      ? { it: G.eqp[i], eq: true, idx: i }
+      : { it: G.hold[i - G.eqp.length], eq: false, idx: i - G.eqp.length };
+  }
+  function invToggle(i) {
+    const sel = invItem(i);
+    if (!sel || !sel.it) return;
+    if (sel.eq) {
+      // unequip back to the hold
+      if (G.hold.length >= 8) { say('Hold is full — scrap something first (X).', '#f88'); return; }
+      G.eqp.splice(sel.idx, 1);
+      G.hold.push(sel.it);
+    } else {
+      // equip: one module per kind — a same-kind fit swaps the old one out
+      const dup = G.eqp.findIndex(m => m.k === sel.it.k);
+      if (dup >= 0) { G.hold[sel.idx] = G.eqp[dup]; G.eqp[dup] = sel.it; }
+      else if (G.eqp.length < 3) { G.hold.splice(sel.idx, 1); G.eqp.push(sel.it); }
+      else { say('All three mounts are fitted — unequip one first.', '#f88'); return; }
+    }
+    if (G.player) applyUpgrades(G.player);
+    tone('sine', 700, 1000, 0.08, 0.15);
+    G.invSel = Math.min(G.invSel, G.eqp.length + G.hold.length - 1);
+    saveMMO();
+  }
+  function invScrap(i) {
+    const sel = invItem(i);
+    if (!sel || !sel.it) return;
+    const c = Math.round(SIM.RARITIES[sel.it.r].scrap * sel.it.p);
+    if (sel.eq) G.eqp.splice(sel.idx, 1); else G.hold.splice(sel.idx, 1);
+    G.credits += c;
+    say(modDef(sel.it.k).name + ' scrapped — +' + c + ' credits', '#fd8');
+    if (G.player) applyUpgrades(G.player);
+    sndPrize();
+    G.invSel = Math.max(0, Math.min(G.invSel, G.eqp.length + G.hold.length - 1));
+    saveMMO();
+  }
+  function drawInventory() {
+    const w = Math.min(430, vw - 16), x = vw / 2 - w / 2;
+    const rows = Math.max(1, G.eqp.length + G.hold.length);
+    const h = 96 + rows * 30;
+    const y0 = Math.max(70, Math.min(vh - h - 10, vh / 2 - h / 2));
+    panel(x, y0, w, h);
+    txt('MODULE HOLD', x + 14, y0 + 24, 15, '#c8ecff', 'left', 800);
+    txt('¢ ' + G.credits, x + w - 14, y0 + 24, 15, '#fd8', 'right', 800);
+    txt('↑↓ choose · ENTER fit / unfit · X scrap · ' + bindLabel('items') + ' closes · 3 mounts, one per module type',
+      x + 14, y0 + 42, 9.5, '#789', 'left');
+    T.ui.inv = [];
+    let y = y0 + 56;
+    const row = (it, eq, selIdx) => {
+      const selNow = G.invSel === selIdx;
+      if (selNow) {
+        ctx.fillStyle = 'rgba(90,140,220,0.16)';
+        ctx.fillRect(x + 6, y - 3, w - 12, 28);
+      }
+      const R = SIM.RARITIES[it.r];
+      ctx.fillStyle = modColor(it, 62, 0.95);
+      ctx.save();
+      ctx.translate(x + 22, y + 10);
+      ctx.rotate(Math.PI / 4);
+      ctx.fillRect(-4, -4, 8, 8);
+      ctx.restore();
+      txt(modLine(it), x + 38, y + 10, 12.5, selNow ? '#eef6ff' : '#cde', 'left', selNow ? 800 : 600);
+      txt(eq ? 'FITTED' : R.label, x + w - 64, y + 10, 10, eq ? '#8f8' : modColor(it, 68), 'right', 700);
+      txt('¢' + Math.round(R.scrap * it.p), x + w - 14, y + 10, 10, '#987', 'right');
+      T.ui.inv.push({ x: x + 6, y: y - 3, w: w - 12, h: 28, i: selIdx });
+      y += 30;
+    };
+    G.eqp.forEach((it, i) => row(it, true, i));
+    if (G.eqp.length && G.hold.length) {
+      ctx.strokeStyle = 'rgba(90,130,200,0.25)';
+      ctx.beginPath(); ctx.moveTo(x + 10, y - 2); ctx.lineTo(x + w - 10, y - 2); ctx.stroke();
+      y += 4;
+    }
+    G.hold.forEach((it, i) => row(it, false, G.eqp.length + i));
+    if (!G.eqp.length && !G.hold.length)
+      txt('Empty. Modules drop from bosses, marauders, and derelict caches.', x + 14, y + 10, 11.5, '#678', 'left');
+    txt(G.eqp.length + '/3 fitted · ' + G.hold.length + '/8 in hold', x + 14, y0 + h - 12, 10, '#678', 'left');
   }
 
   function drawUpgradeBay() {
@@ -4286,7 +4450,9 @@
     } else if (zs && zs.err) {
       txt('zone status unavailable — connecting may still work', vw / 2, vh / 2 + 76, 12, '#a86', 'center');
     }
-    txt('your callsign is your identity: elo, duel record, and stats persist on the server', vw / 2, vh / 2 + 100, 11, '#678', 'center');
+    if (G.nameDeny)
+      txt(G.nameDeny + ' — choose another.', vw / 2, vh / 2 - 46, 12, '#f88', 'center', 700);
+    txt('your callsign is your identity: elo, duel record, and stats persist on the server — the first flight under a name locks it to this browser', vw / 2, vh / 2 + 100, 11, '#678', 'center');
     txt('ESC — back', vw / 2, vh / 2 + 124, 12, '#678', 'center');
   }
   function drawConnecting() {
@@ -4319,7 +4485,7 @@
       bindLabel('repel') + ' repel   ' + bindLabel('burst') + ' burst   ' +
         bindLabel('special') + ' rocket/blink   ' + bindLabel('warp') + ' warp',
       bindLabel('dock') + ' dock   ' + bindLabel('bay') + ' bay   ' +
-        bindLabel('board') + ' contracts   ' + bindLabel('scores') + ' standings',
+        bindLabel('board') + ' contracts   ' + bindLabel('items') + ' hold   ' + bindLabel('scores') + ' standings',
       'ENTER chat · M mute · N music · F fullscreen',
       '',
       'K rebind controls   ·   P resume   ·   BACKSPACE abandon',
@@ -4374,6 +4540,18 @@
   function loadName() {
     try { return GLOBAL.localStorage.getItem('interstellar-name') || ''; } catch (e) { return ''; }
   }
+  // callsign tokens: the server issues one per registered name; joins
+  // claiming a registered name must present it or be refused
+  function loadKeys() {
+    try { return JSON.parse(GLOBAL.localStorage.getItem('interstellar-keys') || '{}') || {}; } catch (e) { return {}; }
+  }
+  function saveKey(name, sec) {
+    try {
+      const k = loadKeys();
+      k[name.toLowerCase()] = sec;
+      GLOBAL.localStorage.setItem('interstellar-keys', JSON.stringify(k));
+    } catch (e) { }
+  }
   function saveName(n) {
     try { GLOBAL.localStorage.setItem('interstellar-name', n); } catch (e) { }
   }
@@ -4383,17 +4561,46 @@
       G.credits = d.c | 0; G.relics = d.r | 0; G.upg = d.u || {}; G.zoneTeam = d.sq | 0;
       G.contracts = Array.isArray(d.ct) ? d.ct : [];
       G.charted = Array.isArray(d.ch) ? d.ch : [];
-    } catch (e) { G.credits = 0; G.relics = 0; G.upg = {}; G.contracts = []; G.charted = []; }
+      G.hold = Array.isArray(d.hd) ? d.hd : [];
+      G.eqp = Array.isArray(d.eq) ? d.eq : [];
+    } catch (e) { G.credits = 0; G.relics = 0; G.upg = {}; G.contracts = []; G.charted = []; G.hold = []; G.eqp = []; }
   }
   function saveMMO() {
     try {
       GLOBAL.localStorage.setItem('interstellar-mmo', JSON.stringify({
         c: G.credits, r: G.relics, u: G.upg, sq: G.zoneTeam,
         ct: G.contracts, ch: G.charted,
+        hd: G.hold, eq: G.eqp,
       }));
     } catch (e) { }
   }
   const WING_NAMES = { 1: 'TALON', 2: 'HALO', 3: 'CINDER', 4: 'SHADE' };
+
+  // ------------------------------------------------------------ modules
+  // Loot items: {k: module kind, r: rarity index, p: power roll}. The find
+  // itself is the fun — value = base x rarity multiplier x roll.
+  const modDef = k => SIM.MODULES.find(m => m.k === k) || SIM.MODULES[0];
+  const modVal = it => modDef(it.k).base * SIM.RARITIES[it.r].mul * it.p;
+  const modColor = (it, l, a) =>
+    'hsla(' + SIM.RARITIES[it.r].hue + ',85%,' + (l == null ? 62 : l) + '%,' + (a == null ? 1 : a) + ')';
+  function modLine(it) {
+    const d = modDef(it.k), v = modVal(it);
+    const unit = it.k === 'trigger' ? 'px' : '%';
+    return d.name + '  ' + (v >= 0 ? '+' : '') + (it.k === 'trigger' ? Math.round(v) : v.toFixed(1)) + unit + ' ' + d.stat;
+  }
+  function holdAdd(it) {
+    if (G.hold.length < 8) { G.hold.push(it); return null; }
+    // hold is full: the LEAST precious thing aboard makes way — auto-scrapped
+    // for credits, never silently deleted, and never at a legendary's expense
+    let low = it, li = -1;
+    G.hold.forEach((h, i) => {
+      if (SIM.RARITIES[h.r].scrap * h.p < SIM.RARITIES[low.r].scrap * low.p) { low = h; li = i; }
+    });
+    if (li >= 0) { G.hold[li] = it; }
+    const c = Math.round(SIM.RARITIES[low.r].scrap * low.p);
+    G.credits += c;
+    return { scrapped: low, c };
+  }
 
   // ------------------------------------------------------------ contracts
   // Objectives so the vastness always has a point: you carry three at a time,
@@ -4488,6 +4695,21 @@
     p.bursts = Math.max(p.bursts, 1 + (u.burst || 0));
     p.rockets = Math.max(p.rockets, u.rocket || 0);
     p.noGreens = true;
+    // equipped modules stack on top of the upgrade tracks (one per kind,
+    // enforced at equip time)
+    p.dmgMul = 1; p.bombMul = 1; p.armorMul = 1; p.modProx = 0; G.scoopMul = 1;
+    for (const it of G.eqp) {
+      const v = modVal(it) / 100;
+      if (it.k === 'burner') { p.thrust *= 1 + v; p.maxSpeed *= 1 + v; }
+      else if (it.k === 'cap') p.maxEnergy = Math.round(p.maxEnergy * (1 + v));
+      else if (it.k === 'coil') p.recharge *= 1 + v;
+      else if (it.k === 'loader') p.dmgMul = 1 + v;
+      else if (it.k === 'warhead') p.bombMul = 1 + v;
+      else if (it.k === 'deflect') p.armorMul = 1 + v;   // base is negative
+      else if (it.k === 'trigger') p.modProx = modVal(it);
+      else if (it.k === 'scoop') G.scoopMul = 1 + v;
+    }
+    p.energy = Math.min(p.energy, p.maxEnergy);
   }
   function buyUpgrade(i) {
     const U = UPGRADES[i];
@@ -4618,7 +4840,7 @@
   }
   function launchOnline(shipKey) {
     G.pendingShip = shipKey;
-    netSend({ t: 'join', name: G.name, ship: shipKey });
+    netSend({ t: 'join', name: G.name, ship: shipKey, sec: loadKeys()[G.name.toLowerCase()] || '' });
     // welcome handler flips to play
   }
   function leaveToTitle() {
@@ -4653,7 +4875,7 @@
     ['gun', 'Guns'], ['bomb', 'Bomb'],
     ['repel', 'Repel'], ['burst', 'Burst'], ['special', 'Rocket / Blink'],
     ['warp', 'Warp to Comet'], ['dock', 'Dock / launch'],
-    ['bay', 'Upgrade bay'], ['board', 'Contract board'], ['scores', 'Standings (hold)'],
+    ['bay', 'Upgrade bay'], ['board', 'Contract board'], ['items', 'Module hold'], ['scores', 'Standings (hold)'],
   ];
   const DEFAULT_BINDS = {
     thrust: ['ArrowUp', 'KeyW'], reverse: ['ArrowDown', 'KeyS'],
@@ -4663,7 +4885,7 @@
     // Shift is THE bomb key; B is the alternate. Tab is no longer a weapon.
     bomb: ['ShiftLeft', 'ShiftRight', 'KeyB'],
     repel: ['KeyE'], burst: ['KeyQ'], special: ['KeyR'], warp: ['KeyT'],
-    dock: ['KeyG'], bay: ['KeyU'], board: ['KeyJ'], scores: ['Tab'],
+    dock: ['KeyG'], bay: ['KeyU'], board: ['KeyJ'], items: ['KeyI'], scores: ['Tab'],
   };
   let BINDS = {};
   function loadBinds() {
@@ -4672,6 +4894,15 @@
     try {
       const d = JSON.parse(GLOBAL.localStorage.getItem('interstellar-binds') || '{}');
       for (const k in BINDS) if (Array.isArray(d[k]) && d[k].length) BINDS[k] = d[k].slice(0, 3);
+      // a new release can ship an action whose default key a pilot already
+      // claimed for something else — their bind wins, the new action yields
+      for (const k in BINDS) {
+        if (Array.isArray(d[k]) && d[k].length) continue;      // custom, keep
+        for (const o in BINDS) {
+          if (o === k || !(Array.isArray(d[o]) && d[o].length)) continue;
+          BINDS[k] = BINDS[k].filter(c => BINDS[o].indexOf(c) < 0);
+        }
+      }
     } catch (e) { }
   }
   function saveBinds() {
@@ -4832,8 +5063,8 @@
         saveName(G.name);
         netConnect();
       } else if (code === 'Escape') G.state = 'title';
-      else if (code === 'Backspace') G.nameStr = G.nameStr.slice(0, -1);
-      else if (e.key && e.key.length === 1 && /[\w\- .]/.test(e.key) && G.nameStr.length < 14) G.nameStr += e.key;
+      else if (code === 'Backspace') { G.nameStr = G.nameStr.slice(0, -1); G.nameDeny = ''; }
+      else if (e.key && e.key.length === 1 && /[\w\- .]/.test(e.key) && G.nameStr.length < 14) { G.nameStr += e.key; G.nameDeny = ''; }
       return;
     }
 
@@ -4870,11 +5101,24 @@
       e.preventDefault();
       return;
     }
+    if (isAct(code, 'items') && G.mmo && G.state === 'play' && !G.chatOpen) {
+      G.invOpen = !G.invOpen; G.invSel = 0;
+      e.preventDefault();
+      return;
+    }
     if (isAct(code, 'dock') && G.state === 'play' && !G.chatOpen && G.player) {
       if (G.player.docked) SIM.undockShip(G.W, G.player);
       else if (!SIM.dockShip(G.W, G.player)) say('No carrier in docking range.', '#f88');
       e.preventDefault();
       return;
+    }
+    if (G.invOpen && G.state === 'play' && !G.chatOpen) {
+      const total = G.eqp.length + G.hold.length;
+      if (code === 'Escape') { G.invOpen = false; e.preventDefault(); return; }
+      if (code === 'ArrowUp' && total) { G.invSel = (G.invSel + total - 1) % total; e.preventDefault(); return; }
+      if (code === 'ArrowDown' && total) { G.invSel = (G.invSel + 1) % total; e.preventDefault(); return; }
+      if (code === 'Enter' && total) { invToggle(G.invSel); e.preventDefault(); return; }
+      if (code === 'KeyX' && total) { invScrap(G.invSel); e.preventDefault(); return; }
     }
     if (G.upgOpen && G.state === 'play' && !G.chatOpen) {
       if (code === 'Escape') { G.upgOpen = false; e.preventDefault(); return; }

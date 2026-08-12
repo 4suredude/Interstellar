@@ -6,6 +6,7 @@
    Usage: node dev/smoke.js */
 'use strict';
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 
@@ -256,6 +257,55 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     assert(SIM.undockShip(Wk, hunter) && !hunter.docked, 'and can launch again');
     SIM.drainEvents(Wk);
     console.log('OK  capitals: carriers under way, docking, boss tiers, damage + loot');
+  }
+
+  // loot drops: the green/blue/purple/orange module ladder
+  {
+    const Wd = SIM.createWorld({ seed: 777, spawnPrizes: true, zoneWorld: true, authority: true });
+    // a dreadnought kill sheds three modules, the first a guaranteed legendary
+    const dn = Wd.capitals.find(c => c.kind === 'dreadnought');
+    SIM.damageCapital(Wd, dn, 1e9, null);
+    assert(Wd.drops.length === 3, 'dreadnought kill sheds 3 modules (' + Wd.drops.length + ')');
+    assert(Wd.drops.some(d => d.rar === 3), 'the dreadnought always drops a legendary');
+    assert(Wd.drops.every(d => d.rar >= 1), 'boss tables never roll common');
+    // a local pilot scoops them by flying over
+    const pilot = SIM.makeShip(Wd, 'corsair', 'local', 'Looter', null, 0);
+    SIM.spawnShip(Wd, pilot);
+    pilot.noGreens = true;
+    pilot.x = Wd.drops[0].x; pilot.y = Wd.drops[0].y;
+    SIM.drainEvents(Wd);
+    SIM.updateWorld(Wd, SIM.STEP);
+    const loot = SIM.drainEvents(Wd).filter(e => e.e === 'loot');
+    assert(loot.length >= 1 && loot[0].id === pilot.id, 'flying over a drop fires a loot event');
+    assert(loot[0].p >= 0.85 && loot[0].p <= 1.15, 'power roll stays in band (' + loot[0].p + ')');
+    // bots never hoover the loot up first
+    const bot = SIM.makeShip(Wd, 'corsair', 'bot', 'Vulture', null, 0);
+    SIM.spawnShip(Wd, bot);
+    bot.noGreens = true;
+    const before = Wd.drops.length;
+    if (before) { bot.x = Wd.drops[0].x; bot.y = Wd.drops[0].y; pilot.x = 50000; pilot.y = 50000; }
+    SIM.updateWorld(Wd, SIM.STEP);
+    assert(Wd.drops.length === before, 'bots do not collect module drops');
+    // the module stat hooks bite: damage, bombs, armor
+    const dmg0 = 150 + 150 * pilot.gunLevel;
+    pilot.dmgMul = 1.2;
+    SIM.fireGun(Wd, pilot);
+    const shot = Wd.bullets[Wd.bullets.length - 1];
+    assert(shot && Math.abs(shot.dmg - dmg0 * 1.2 * pilot.t.gunDmgMul) < 1,
+      'Autoloader multiplies bullet damage (' + (shot && shot.dmg) + ')');
+    const victim = SIM.makeShip(Wd, 'titan', 'local', 'Tank', null, 0);
+    SIM.spawnShip(Wd, victim);
+    victim.safe = 0; victim.armorMul = 0.8;
+    const e0 = victim.energy;
+    SIM.damageShip(Wd, victim, 100, null);
+    assert(Math.abs((e0 - victim.energy) - 100 * 0.8 * (victim.t.armor || 1)) < 1,
+      'Deflector Plate reduces damage taken (' + (e0 - victim.energy) + ')');
+    // match modes stay classic: no drops outside Zone worlds
+    const Wm = SIM.createWorld({ seed: 777, spawnPrizes: true });
+    const dn2 = Wm.capitals.find(c => c.kind === 'dreadnought');
+    SIM.damageCapital(Wm, dn2, 1e9, null);
+    assert(Wm.drops.length === 0, 'no module drops outside the Zone');
+    console.log('OK  loot: rarity ladder drops, pickup, stat hooks, Zone-only');
   }
 
   // bomb identity: ricochet is a HULL TRAIT, and the fuse is generous
@@ -586,8 +636,11 @@ const SIM = require(path.join(ROOT, 'sim.js'));
   const PORT = 8667;
   // fresh pilot database so elo assertions are deterministic
   try { fs.rmSync(path.join(ROOT, 'data'), { recursive: true, force: true }); } catch (e) { }
+  // a fresh pilot DB per run: callsign registration is stateful, and the
+  // test must own the state it asserts against
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'interstellar-smoke-'));
   const srv = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
-    env: Object.assign({}, process.env, { PORT: String(PORT), BOTS: '4' }),
+    env: Object.assign({}, process.env, { PORT: String(PORT), BOTS: '4', DATA_DIR: dataDir }),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let srvLog = '';
@@ -613,17 +666,18 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     assert(simSrc.includes('INTERSTELLAR'), 'server serves sim.js');
 
     // two real WebSocket clients (Node's built-in WebSocket)
-    function client(name, ship) {
+    function client(name, ship, sec) {
       return new Promise((resolve, reject) => {
         const ws = new WebSocket('ws://localhost:' + PORT);
         ws.binaryType = 'arraybuffer';
-        const c = { ws, name, msgs: [], bins: [], welcome: null };
-        ws.onopen = () => ws.send(JSON.stringify({ t: 'join', name, ship }));
+        const c = { ws, name, msgs: [], bins: [], welcome: null, deny: null };
+        ws.onopen = () => ws.send(JSON.stringify({ t: 'join', name, ship, sec: sec || '' }));
         ws.onmessage = m => {
           if (typeof m.data !== 'string') { c.bins.push(new DataView(m.data)); return; }
           const msg = JSON.parse(m.data);
           c.msgs.push(msg);
           if (msg.t === 'welcome') { c.welcome = msg; resolve(c); }
+          if (msg.t === 'deny') { c.deny = msg; resolve(c); }
         };
         ws.onerror = () => reject(new Error('ws error for ' + name));
         setTimeout(() => reject(new Error('welcome timeout for ' + name)), 4000);
@@ -656,6 +710,36 @@ const SIM = require(path.join(ROOT, 'sim.js'));
 
     const A = await client('Alice', 'corsair');
     assert(A.welcome.id > 0 && Number.isFinite(A.welcome.seed), 'A got welcome with id+seed');
+    // callsign registration: Alice's first flight minted her token
+    assert(typeof A.welcome.sec === 'string' && A.welcome.sec.length === 32,
+      'first flight under a name mints a 128-bit token');
+    assert(A.welcome.name === 'Alice', 'welcome echoes the final callsign');
+    {
+      const imp = await client('Alice', 'corsair');           // no token
+      assert(imp.deny && !imp.welcome, 'joining a registered callsign without its token is refused');
+      imp.ws.close();
+      const imp2 = await client('Alice', 'corsair', 'deadbeef');  // wrong token
+      assert(imp2.deny && !imp2.welcome, 'a wrong token is refused too');
+      imp2.ws.close();
+      const twin = await client('Alice', 'corsair', A.welcome.sec);  // owner, double login
+      assert(twin.welcome && twin.welcome.name !== 'Alice' && twin.welcome.name.startsWith('Alice'.slice(0, 5)),
+        'the owner joining twice gets suffixed, not refused (' + (twin.welcome && twin.welcome.name) + ')');
+      twin.ws.close();
+      await new Promise(r => setTimeout(r, 200));
+    }
+    {
+      // the everyday case: disconnect, come back tomorrow, same identity
+      const c1 = await client('Carl', 'dagger');
+      const tok = c1.welcome.sec;
+      c1.ws.close();
+      await new Promise(r => setTimeout(r, 250));
+      const c2 = await client('Carl', 'dagger', tok);
+      assert(c2.welcome && c2.welcome.name === 'Carl' && !c2.welcome.sec,
+        'a returning pilot reclaims the exact name, and no new token is minted');
+      c2.ws.close();
+      await new Promise(r => setTimeout(r, 200));
+    }
+    console.log('OK  callsign registration: token minted, impostors refused, owner can re-fly');
     assert(A.welcome.roster.length === 4, 'A sees 4 bots in roster');
     assert(A.welcome.team === 1 || A.welcome.team === 2, 'teams mode assigns Alice a team');
     assert(A.welcome.goal > 0 && A.welcome.me && A.welcome.me.elo === 1200, 'welcome carries goal + fresh elo');

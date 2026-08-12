@@ -111,6 +111,35 @@ const SHOTS = [
     `,
   },
   {
+    name: 'loot', view: DESKTOP, run: 1.4,
+    // a dreadnought wreck: rarity drops on the field, then scoop two and
+    // open the hold so the shot shows the whole loop in one frame
+    pre: `
+      const W = A.G.W, me = A.G.player;
+      // scoop everything but the legendary — it stays on the field, beaming.
+      // one update step can collect several clustered drops, so re-find the
+      // next non-legendary each pass instead of trusting an index
+      for (let guard = 0; guard < 12; guard++) {
+        const d = W.drops.find(q => q.rar !== 3);
+        if (!d) break;
+        me.x = d.x; me.y = d.y;
+        A.SIM.updateWorld(W, A.STEP);
+      }
+      const leg = W.drops.find(d => d.rar === 3);
+      me.x = (leg ? leg.x : me.x) + 240; me.y = (leg ? leg.y : me.y) + 60;
+      me.vx = 0; me.vy = 0;
+      A.G.cam.x = me.x - 120; A.G.cam.y = me.y - 30;
+      A.G.invOpen = true; A.G.invSel = 0;
+    `,
+    setup: `
+      A.G.pendingMode = 'ffa';
+      const me = A.startSolo('corsair');
+      const dn = A.G.W.capitals.find(c => c.kind === 'dreadnought');
+      me.x = dn.x + 260; me.y = dn.y;
+      A.SIM.damageCapital(A.G.W, dn, 1e9, me);
+    `,
+  },
+  {
     name: 'controls', view: DESKTOP, run: 1.0,
     setup: `
       A.G.pendingMode = 'ffa';
