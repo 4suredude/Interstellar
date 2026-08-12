@@ -717,7 +717,7 @@ function onMessage(cl, msg) {
       } else if (msg.kind === 'bomb') {
         if (!(+msg.level >= 1 && +msg.level <= 3) || !(+msg.bounces <= 5)) return;
         if (!near(msg.x, msg.y) || !(Math.abs(+msg.vx) <= 1300) || !(Math.abs(+msg.vy) <= 1300)) return;
-        const prox = (+msg.prox >= 0 && +msg.prox <= 100) ? +msg.prox : 15;
+        const prox = (+msg.prox >= 0 && +msg.prox <= 160) ? +msg.prox : 30;
         msg.prox = prox;
         relay = { t: 'fire', kind: 'bomb', id: cl.id, x: +msg.x, y: +msg.y, vx: +msg.vx, vy: +msg.vy, level: +msg.level | 0, bounces: +msg.bounces | 0, prox };
         SIM.injectBomb(W, s, msg);

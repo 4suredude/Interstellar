@@ -141,7 +141,7 @@
       cockpit: [0.25, 0, 0.15, 0.1], engines: [[-0.55, 0]],
     },
     paladin: {
-      label: 'Paladin', damp: 0.25, hue: 210, bombBounce: 2,
+      label: 'Paladin', damp: 0.25, hue: 210, bombBounce: 3,
       desc: 'The all-rounder. Dependable guns and bombs that ricochet down corridors.',
       maxEnergy: 1600, recharge: 115, thrust: 225, maxSpeed: 340, turn: 3.2,
       radius: 12, bounce: 0.55,
@@ -636,6 +636,16 @@
       const p = findClearNear(W, x, y, rng) || { x, y };
       W.relicSlots.push({ x: p.x, y: p.y, taken: -999 });
     }
+
+    // DERELICT CACHES: salvage worth credits, strewn across the whole map so
+    // the deep frontier always has something to find. Common, quick, and
+    // respawning — this is what makes a long burn pay for itself.
+    W.caches = [];
+    for (let i = 0; i < 200; i++) {
+      const cx2 = 500 + rng() * (WORLD - 1000), cy2 = 500 + rng() * (WORLD - 1000);
+      const p = findClearNear(W, cx2, cy2, rng);
+      if (p) W.caches.push({ x: p.x, y: p.y, taken: -999 });
+    }
   }
   // ------------------------------------------------------------ territory
   const quadOf = (x, y) => ({
@@ -710,7 +720,7 @@
   // Generated events on a DETERMINISTIC timeline (a pure function of seed
   // and world time, like the storm rocks) — every client computes the same
   // asteroid shower, marauder raid, or stellar collapse at the same moment.
-  const EV_PERIOD = 115, EV_LEAD = 18;
+  const EV_PERIOD = 70, EV_LEAD = 18;
   function evRnd(W, idx, n) {
     // murmur3 finalizer: consecutive indices must decorrelate fully
     let h = (((W.opts.seed | 0) >>> 0) + Math.imul(idx + 1, 0x9E3779B1) + Math.imul(n + 1, 0x85EBCA77)) >>> 0;
@@ -755,6 +765,32 @@
     };
   }
 
+  // pirates: hostile to every squad, worth a bounty, and they do not despawn
+  function spawnMarauder(W, x, y, spread) {
+    const m = makeShip(W, pick(['dagger', 'reaper', 'comet']), 'bot', 'Marauder', null, 5);
+    m.marauder = true;
+    m.ai.skill = 0.8;
+    m.bounty = 60;                   // their heads are worth credits
+    spawnShip(W, m);
+    const r = spread || 500;
+    const p = findClearNear(W, x + rand(-r, r), y + rand(-r, r)) || { x, y };
+    m.x = p.x; m.y = p.y;
+    ev(W, { e: 'raider', id: m.id, name: m.name, ship: m.type, hue: m.hue, x: m.x, y: m.y });
+    return m;
+  }
+  // the Dead Zone is never safe: a standing pirate presence lives there
+  function seedDeadZone(W, n) {
+    if (!W.deadZone) return [];
+    const cx = (W.deadZone.qx + 0.5) * QUADPX, cy = (W.deadZone.qy + 0.5) * QUADPX;
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const m = spawnMarauder(W, cx, cy, QUADPX * 0.35);
+      m.ai.patrolQ = W.deadZone.qy * GRID + W.deadZone.qx;
+      out.push(m);
+    }
+    return out;
+  }
+
   function rockAt(W, rk, t) {
     const a1 = rk.p1 + rk.w1 * t, a2 = rk.p2 + rk.w2 * t;
     return {
@@ -793,7 +829,7 @@
       rockT: 0, wormT: 0, novaT: 0,   // hazard grace timers
       kills: 0, deaths: 0, score: 0,
       ctl: { turn: 0, thrust: 0, strafe: 0, gun: false, bomb: false },
-      ai: { target: null, mode: 'roam', think: rand(0, 0.2), wp: null, err: 0, dodge: 0, dodgeAngle: 0, avoid: 0, wantRepel: false, skill: 0.5 },
+      ai: { target: null, mode: 'roam', think: rand(0, 0.2), wp: null, err: 0, dodge: 0, dodgeAngle: 0, avoid: 0, wantRepel: false, skill: 0.5, patrolQ: null, escort: 0 },
       // ghost interpolation
       netX: 0, netY: 0, netVx: 0, netVy: 0, netA: 0, netT: 0, netTh: 0, netFrac: 1,
     };
@@ -951,8 +987,12 @@
       vx: s.vx + Math.cos(s.angle) * s.t.bombSpeed,
       vy: s.vy + Math.sin(s.angle) * s.t.bombSpeed,
       life: 3.4, level: s.bombLevel,
-      bounces: s.bombLevel + (s.t.bombBounce || 0),
-      prox: 12 + 5 * s.bombLevel + 22 * s.proxPlus,   // greens buy the fuse
+      // ricocheting bombs are a HULL SPECIALTY, not standard issue — every
+      // other ship's bomb detonates on the wall it hits
+      bounces: s.t.bombBounce || 0,
+      // a bomb you can't quite land is no fun: the fuse ring is generous
+      // enough that a near miss still counts, and greens widen it a lot
+      prox: 30 + 9 * s.bombLevel + 28 * s.proxPlus,
       owner: s,
     };
     W.bombs.push(b);
@@ -964,7 +1004,7 @@
     W.bombs.push({
       x: msg.x, y: msg.y, vx: msg.vx, vy: msg.vy,
       life: 3.4, level: clamp(+msg.level || 1, 1, 3), bounces: clamp(+msg.bounces || 0, 0, 5),
-      prox: clamp(+msg.prox || 15, 0, 100), owner,
+      prox: clamp(+msg.prox || 30, 0, 160), owner,
     });
   }
 
@@ -1218,11 +1258,16 @@
           const d = hyp(p.x - s.x, p.y - s.y);
           if (d < pd) { pd = d; pz = p; }
         }
-        // no green in reach: mostly drift back toward the mid-sector hotspot
-        // (keeps the zone's fights findable in an endless map), sometimes
-        // wander LOCALLY — never a blind trek across 100km of nothing
+        // no green in reach. Patrol pilots work their assigned quadrant so
+        // the frontier is inhabited instead of empty; everyone else drifts
+        // back toward the mid-sector hotspot or wanders locally — never a
+        // blind trek across 100km of nothing
         if (pz) a.wp = { x: pz.x, y: pz.y };
-        else if (Math.random() < 0.6) a.wp = midSectorPoint(W);
+        else if (a.patrolQ != null) {
+          const px2 = (a.patrolQ % GRID + 0.12 + Math.random() * 0.76) * QUADPX;
+          const py2 = (((a.patrolQ / GRID) | 0) + 0.12 + Math.random() * 0.76) * QUADPX;
+          a.wp = solidAtPx(W, px2, py2) ? midSectorPoint(W) : { x: px2, y: py2 };
+        } else if (Math.random() < 0.6) a.wp = midSectorPoint(W);
         else {
           const a2 = rand(0, TAU), rr2 = rand(1200, 4200);
           const nx = clamp(s.x + Math.cos(a2) * rr2, TILE * 4, WORLD - TILE * 4);
@@ -1547,21 +1592,13 @@
         if (W.opts.authority && W.evtSpawned !== EVT.idx) {
           W.evtSpawned = EVT.idx;
           const prowling = W.ships.filter(s => s.marauder && !s.dead).length;
-          for (let i = 0; i < 3 && prowling + i < 7; i++) {
-            const m = makeShip(W, pick(['dagger', 'reaper', 'comet']), 'bot', 'Marauder', null, 5);
-            m.marauder = true;
-            m.ai.skill = 0.8;
-            m.bounty = 60;                   // their heads are worth credits
-            spawnShip(W, m);
-            const p = findClearNear(W, EVT.x + rand(-500, 500), EVT.y + rand(-500, 500)) || { x: EVT.x, y: EVT.y };
-            m.x = p.x; m.y = p.y;
-            ev(W, { e: 'raider', id: m.id, name: m.name, ship: m.type, hue: m.hue, x: m.x, y: m.y });
-          }
+          for (let i = 0; i < 3 && prowling + i < 10; i++) spawnMarauder(W, EVT.x, EVT.y);
         }
       }
     }
 
-    // relic salvage: local human pilots only — bots have no use for tech
+    // relic + cache salvage: local human pilots only — bots have no use for
+    // tech, and only the upgrade economy spends credits
     if (W.relicSlots) {
       for (const s of W.ships) {
         if (s.dead || s.remote || s.bot || !s.noGreens) continue;
@@ -1571,6 +1608,18 @@
           if (hyp(s.x - sl.x, s.y - sl.y) < 30 + s.t.radius) {
             sl.taken = W.time;
             ev(W, { e: 'relic', id: s.id, slot: i, x: sl.x, y: sl.y });
+          }
+        }
+        // caches are dense, so only scan the ones that could be in reach
+        if (W.caches) {
+          for (let i = 0; i < W.caches.length; i++) {
+            const ch = W.caches[i];
+            if (W.time - ch.taken < 90 && ch.taken > -1) continue;
+            if (Math.abs(s.x - ch.x) > 60 || Math.abs(s.y - ch.y) > 60) continue;
+            if (hyp(s.x - ch.x, s.y - ch.y) < 34 + s.t.radius) {
+              ch.taken = W.time;
+              ev(W, { e: 'cache', id: s.id, slot: i, x: ch.x, y: ch.y });
+            }
           }
         }
       }
@@ -1633,8 +1682,8 @@
     TAU, TILE, MAPS, WORLD, STEP, PRIZE_CAP, QUAD, QUADPX, GRID, FACTIONS,
     SHIP_ORDER, SHIP_TYPES, PRIZE_TYPES, BOT_NAMES, HUES,
     clamp, rand, irand, pick, angleNorm, mulberry32,
-    tileSolid, solidAtPx, rectSolid, losClear, randClearPoint, findSpawn, rockAt,
-    quadOf, terrOwner, evActive, showerRockAt, EV_LEAD,
+    tileSolid, solidAtPx, rectSolid, losClear, randClearPoint, findSpawn, findClearNear, rockAt,
+    quadOf, terrOwner, evActive, showerRockAt, EV_LEAD, spawnMarauder, seedDeadZone,
     createWorld, makeShip, removeShip, spawnShip, addBots,
     applyLoadoutDefaults, applyPrize, addPrize, removePrizeById,
     fireGun, fireBomb, doRepel, doBurst, fireRocket, doBlink, warpToBeacon,

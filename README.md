@@ -54,6 +54,20 @@ no law reaches the Dead Zone.
 SHADE) forms on you — two squadmates who hold formation off your stern,
 hunt what you hunt, and fall on whoever falls on you.
 
+**Contracts.** You always carry three, and they complete from what you'd be
+doing anyway — Hunt, Bounty (marauder heads), Salvage, Scavenge (derelict
+caches), Recovery (relics), Survey (chart new quadrants), and Conquest (help
+take ground). Each pays credits and is replaced the moment it's done, so the
+deep frontier always has a reason to be out there. `J` opens the board;
+progress persists with your pilot.
+
+**A frontier that's inhabited.** Two hundred **derelict caches** drift across
+the map — quick amber salvage worth credits, respawning, visible on the
+scanner. Half the zone's ships fly **patrol routes over assigned quadrants**
+rather than clustering at the core, so a long burn runs into somebody. The
+**Dead Zone keeps a standing pirate presence**, and generated events fire
+roughly twice as often as the sector's other hazards.
+
 **Upgrades, not greens.** In the Zone, greens don't grant random powerups
 — you **salvage them for credits** (kills pay too: 30 + bounty). Press
 `U` for the **upgrade bay**: Cannons, Bombs, Engines, Reactor, Recharger,
@@ -201,7 +215,7 @@ and both sides run the same simulation code (`sim.js`) on the same map seed.
 | **Titan** | Slow dreadnought, colossal energy, L3 bombs |
 | **Comet** | Fastest interceptor in the zone, twin linked cannons |
 | **Dagger** | Tiny assassin — off enemy radar, dim to the eye |
-| **Paladin** | Broad-winged all-rounder whose bombs ricochet down corridors |
+| **Paladin** | Broad-winged all-rounder — **the only hull whose bombs ricochet**, three times, down corridors |
 | **Warden** | Support hunter with a self-restocking repel rack |
 
 A new generation of hulls joins the fleet — each with a mechanic all its own:
@@ -228,9 +242,11 @@ A new generation of hulls joins the fleet — each with a mechanic all its own:
 - **Energy warfare** — one bar is shields *and* ammo; a hit that lands with
   nothing left kills you.
 - **Leveled weapons** — L1–L3 color-coded bullets and bombs with splash and
-  knockback; **every bullet ricochets off walls**, bombs detonate on contact
-  with a tight fuse, and **Proximity Fuse greens** widen the detonation
-  radius — and your own bombs hurt you.
+  knockback; **every bullet ricochets off walls**, while **bouncing bombs are
+  a hull specialty** (the Paladin's, and only the Paladin's) — everyone else's
+  detonate on the wall they hit. Bomb fuses are **forgiving**: a near miss
+  still counts, and **Proximity Fuse greens** widen the ring a lot further.
+  Your own bombs still hurt you.
 - **Greens** — anonymous prize boxes: gun/bomb upgrades, MultiFire, proximity
   fuses, repels, bursts, rockets, energy/recharge/thrust/speed boosts.
 - **Repel / Burst / Rocket** specials, corner radar, green kill-feed chat,
@@ -307,6 +323,7 @@ A new generation of hulls joins the fleet — each with a mechanic all its own:
 | `T` | Warp to your team's Comet |
 | `Enter` | Chat (online) — `/duel` `/accept` `/stats` `/votemap` `/help`, `//` for team |
 | `P` / `Esc` | Pause / menu |
+| `U` / `J` | Upgrade bay / contract board (The Zone and online) |
 | `M` | Mute all · `N` Music on/off · `F` Fullscreen |
 
 ## Architecture

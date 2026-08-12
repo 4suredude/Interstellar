@@ -27,6 +27,7 @@
     sel: 0, best: 0, deathBy: '',
     // MMO layer: squad allegiance, credits, permanent upgrades, quadrant
     zoneTeam: 0, credits: 0, relics: 0, upg: {}, mmo: false, upgOpen: false, quad: '', quadIdx: -1, evtSeen: -1,
+    contracts: [], charted: [],
     mode: 'ffa', pendingMode: 'squad', match: null,
     banner: null, lastKillT: -99, combo: 0, duelW: 0, duelL: 0,
     demoT: 0, demoShip: null,
@@ -398,6 +399,27 @@
   };
   const musTheme = () => MUS_THEMES[MUS.theme] || MUS_THEMES.frontier;
   const stepOf = () => 60 / musTheme().bpm / 4;
+  // Every musical voice plays into the ACTIVE theme bus. A palette change
+  // crossfades to the other bus, so the outgoing theme's long pads (which
+  // sustain ~5s and are in a different key and tempo) fade away instead of
+  // stacking on top of the new one — that overlap was the "two tracks at
+  // once" artifact.
+  const musOut = () => SFX.out || SFX.musBus;
+  function musSwapBus(t) {
+    if (!SFX.busA || !SFX.busB) return;
+    const from = SFX.out === SFX.busA ? SFX.busA : SFX.busB;
+    const to = SFX.out === SFX.busA ? SFX.busB : SFX.busA;
+    const XF = 1.1;
+    try {
+      from.gain.cancelScheduledValues(t);
+      from.gain.setValueAtTime(from.gain.value, t);
+      from.gain.linearRampToValueAtTime(0, t + XF);
+      to.gain.cancelScheduledValues(t);
+      to.gain.setValueAtTime(to.gain.value, t);
+      to.gain.linearRampToValueAtTime(1, t + XF);
+    } catch (e) { }
+    SFX.out = to;
+  }
   const MUS_ARPS = [
     [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1],
     [1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0],
@@ -420,7 +442,11 @@
   function musThemeAt() {
     if (!G.player || G.player.dead || G.state !== 'play' || !G.W) return 'frontier';
     const p = G.player, W = G.W;
-    if (W.danger && Math.hypot(p.x - W.danger.x, p.y - W.danger.y) < W.danger.r + 900) return 'storm';
+    // storm boundary is hysteretic: skimming the rim must not flap the score
+    if (W.danger) {
+      const d = Math.hypot(p.x - W.danger.x, p.y - W.danger.y);
+      if (d < W.danger.r + (MUS.theme === 'storm' ? 1700 : 900)) return 'storm';
+    }
     const GR = SIM.GRID, MID = GR >> 1;
     const qx = clamp((p.x / SIM.QUADPX) | 0, 0, GR - 1), qy = clamp((p.y / SIM.QUADPX) | 0, 0, GR - 1);
     if (W.deadZone && W.deadZone.qx === qx && W.deadZone.qy === qy) return 'storm';  // no law, no comfort
@@ -483,6 +509,7 @@
     g.gain.setValueAtTime(0.0001, s0);
     g.gain.linearRampToValueAtTime(0.09, t);
     g.gain.linearRampToValueAtTime(0.0001, t + 0.06);
+    // straight to the master music bus: the swell spans theme crossfades
     src.connect(f); f.connect(g); g.connect(SFX.musBus);
     src.start(s0); src.stop(t + 0.1);
   }
@@ -496,7 +523,7 @@
     const g = a.createGain();
     g.gain.setValueAtTime(0.08, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    src.connect(f); f.connect(g); g.connect(SFX.musBus);
+    src.connect(f); f.connect(g); g.connect(musOut());
     src.start(t); src.stop(t + dur + 0.05);
   }
 
@@ -511,7 +538,14 @@
     comp.attack.value = 0.004; comp.release.value = 0.18;
     SFX.musBus.connect(comp);
     comp.connect(SFX.master);
-    // dotted-8th feedback delay for the arp — the classic space echo
+    // two theme buses under the master: voices always play into the active
+    // one, and a palette change crossfades between them (see musSwapBus)
+    SFX.busA = a.createGain(); SFX.busA.gain.value = 1; SFX.busA.connect(SFX.musBus);
+    SFX.busB = a.createGain(); SFX.busB.gain.value = 0; SFX.busB.connect(SFX.musBus);
+    SFX.out = SFX.busA;
+    // dotted-8th feedback delay for the arp — the classic space echo.
+    // Wet returns to the MASTER music bus, not a theme bus, so tails aren't
+    // double-faded during a crossfade.
     const d = a.createDelay(1);
     d.delayTime.value = MUS_STEP * 3;
     const fb = a.createGain(); fb.gain.value = 0.35;
@@ -535,7 +569,7 @@
       o.connect(f); head = f;
     }
     head.connect(g);
-    g.connect(SFX.musBus);
+    g.connect(musOut());
     if (echo && SFX.musDelay) g.connect(SFX.musDelay);
     o.start(t); o.stop(t + dur + 0.05);
   }
@@ -563,7 +597,7 @@
         g.gain.linearRampToValueAtTime(0.035, t + atk);
         g.gain.setValueAtTime(0.035, t + dur);
         g.gain.exponentialRampToValueAtTime(0.0001, t + dur + rel);
-        o.connect(f); f.connect(g); g.connect(SFX.musBus);
+        o.connect(f); f.connect(g); g.connect(musOut());
         o.start(t); o.stop(t + dur + rel + 0.1);
       }
     }
@@ -578,7 +612,7 @@
     const g = a.createGain();
     g.gain.setValueAtTime(0.3 + 0.2 * p, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
-    o.connect(g); g.connect(SFX.musBus);
+    o.connect(g); g.connect(musOut());
     o.start(t); o.stop(t + 0.2);
     if (p >= 0.95) {
       // click transient: what makes a rave kick punch through the mix
@@ -587,7 +621,7 @@
       const ng = a.createGain();
       ng.gain.setValueAtTime(0.08, t);
       ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.02);
-      src.connect(f); f.connect(ng); ng.connect(SFX.musBus);
+      src.connect(f); f.connect(ng); ng.connect(musOut());
       src.start(t); src.stop(t + 0.03);
     }
   }
@@ -601,7 +635,7 @@
     const g = a.createGain();
     g.gain.setValueAtTime(vol, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + (dec || 0.05));
-    src.connect(f); f.connect(g); g.connect(SFX.musBus);
+    src.connect(f); f.connect(g); g.connect(musOut());
     src.start(t); src.stop(t + (dec || 0.05) + 0.03);
   }
   function musSnare(t, vol) {
@@ -611,7 +645,7 @@
     const g = a.createGain();
     g.gain.setValueAtTime(vol, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + 0.13);
-    src.connect(f); f.connect(g); g.connect(SFX.musBus);
+    src.connect(f); f.connect(g); g.connect(musOut());
     src.start(t); src.stop(t + 0.15);
     const o = a.createOscillator(); o.type = 'triangle';
     o.frequency.setValueAtTime(210, t);
@@ -619,7 +653,7 @@
     const og = a.createGain();
     og.gain.setValueAtTime(vol * 0.8, t);
     og.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
-    o.connect(og); og.connect(SFX.musBus);
+    o.connect(og); og.connect(musOut());
     o.start(t); o.stop(t + 0.1);
   }
   function musBass(t, m, vol) {
@@ -634,14 +668,14 @@
     g.gain.setValueAtTime(0.0001, t);
     g.gain.linearRampToValueAtTime(vol, t + 0.008);
     g.gain.exponentialRampToValueAtTime(0.0001, t + 0.15);
-    o.connect(f); f.connect(g); g.connect(SFX.musBus);
+    o.connect(f); f.connect(g); g.connect(musOut());
     o.start(t); o.stop(t + 0.18);
     const s = a.createOscillator(); s.type = 'sine'; s.frequency.value = midiF(m - 12);
     const sg = a.createGain();
     sg.gain.setValueAtTime(0.0001, t);
     sg.gain.linearRampToValueAtTime(vol * 0.6, t + 0.01);
     sg.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
-    s.connect(sg); sg.connect(SFX.musBus);
+    s.connect(sg); sg.connect(musOut());
     s.start(t); s.stop(t + 0.16);
   }
   function musShak(t, vol) {
@@ -653,7 +687,7 @@
     g.gain.setValueAtTime(0.0001, t);
     g.gain.linearRampToValueAtTime(vol, t + 0.012);
     g.gain.exponentialRampToValueAtTime(0.0001, t + 0.045);
-    src.connect(f); f.connect(g); g.connect(SFX.musBus);
+    src.connect(f); f.connect(g); g.connect(musOut());
     src.start(t); src.stop(t + 0.06);
   }
   function musTom(t, f0, vol) {
@@ -664,7 +698,7 @@
     const g = a.createGain();
     g.gain.setValueAtTime(vol, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
-    o.connect(g); g.connect(SFX.musBus);
+    o.connect(g); g.connect(musOut());
     o.start(t); o.stop(t + 0.22);
   }
   function musRim(t, vol) {
@@ -674,7 +708,7 @@
     const g = a.createGain();
     g.gain.setValueAtTime(vol, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
-    src.connect(f); f.connect(g); g.connect(SFX.musBus);
+    src.connect(f); f.connect(g); g.connect(musOut());
     src.start(t); src.stop(t + 0.04);
   }
   function musLead(t, m, dur, vol) {
@@ -688,7 +722,7 @@
       g.gain.linearRampToValueAtTime(vol / 3, t + 0.02);
       g.gain.setValueAtTime(vol / 3, t + dur * 0.7);
       g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-      o.connect(f); f.connect(g); g.connect(SFX.musBus);
+      o.connect(f); f.connect(g); g.connect(musOut());
       if (det === 1 && SFX.musDelay) g.connect(SFX.musDelay);
       o.start(t); o.stop(t + dur + 0.05);
     }
@@ -703,7 +737,7 @@
         const g = a.createGain();
         g.gain.setValueAtTime(vol * k / 3, t);
         g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
-        o.connect(f); f.connect(g); g.connect(SFX.musBus);
+        o.connect(f); f.connect(g); g.connect(musOut());
         o.start(t); o.stop(t + 0.24);
       }
     }
@@ -716,7 +750,7 @@
       const g = a.createGain();
       g.gain.setValueAtTime(vol * k, t);
       g.gain.exponentialRampToValueAtTime(0.0001, t + dec);
-      o.connect(g); g.connect(SFX.musBus);
+      o.connect(g); g.connect(musOut());
       if (mul === 1 && SFX.musDelay) g.connect(SFX.musDelay);
       o.start(t); o.stop(t + dec + 0.05);
     }
@@ -732,7 +766,7 @@
     g.gain.setValueAtTime(0.0001, t);
     g.gain.linearRampToValueAtTime(vol, t + 0.006);
     g.gain.exponentialRampToValueAtTime(0.0001, t + 0.13);
-    o.connect(f); f.connect(g); g.connect(SFX.musBus);
+    o.connect(f); f.connect(g); g.connect(musOut());
     if (SFX.musDelay) g.connect(SFX.musDelay);
     o.start(t); o.stop(t + 0.16);
   }
@@ -747,7 +781,7 @@
       const g = a.createGain();
       g.gain.setValueAtTime(vol / 4, t);
       g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
-      o.connect(f); f.connect(g); g.connect(SFX.musBus);
+      o.connect(f); f.connect(g); g.connect(musOut());
       if (SFX.musDelay) g.connect(SFX.musDelay);
       o.start(t); o.stop(t + 0.2);
     }
@@ -763,7 +797,7 @@
     g.gain.setValueAtTime(0.0001, t);
     g.gain.linearRampToValueAtTime(0.11, t + dur);
     g.gain.linearRampToValueAtTime(0.0001, t + dur + 0.05);
-    src.connect(f); f.connect(g); g.connect(SFX.musBus);
+    src.connect(f); f.connect(g); g.connect(musOut());
     src.start(t); src.stop(t + dur + 0.1);
     const o = a.createOscillator(); o.type = 'sawtooth';
     o.frequency.setValueAtTime(midiF(45), t);
@@ -772,7 +806,7 @@
     og.gain.setValueAtTime(0.0001, t);
     og.gain.linearRampToValueAtTime(0.05, t + dur);
     og.gain.linearRampToValueAtTime(0.0001, t + dur + 0.05);
-    o.connect(og); og.connect(SFX.musBus);
+    o.connect(og); og.connect(musOut());
     o.start(t); o.stop(t + dur + 0.1);
   }
   function musCrash(t) {
@@ -782,7 +816,7 @@
     const g = a.createGain();
     g.gain.setValueAtTime(0.16, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + 1.4);
-    src.connect(f); f.connect(g); g.connect(SFX.musBus);
+    src.connect(f); f.connect(g); g.connect(musOut());
     src.start(t); src.stop(t + 1.5);
   }
   function musBoom(t, m) {
@@ -794,7 +828,7 @@
     const g = a.createGain();
     g.gain.setValueAtTime(0.4, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + 0.8);
-    o.connect(g); g.connect(SFX.musBus);
+    o.connect(g); g.connect(musOut());
     o.start(t); o.stop(t + 0.9);
   }
 
@@ -815,8 +849,10 @@
     const hook = MUS_HOOK[hp];
     const swung = t + SD * 0.12;                // light swing on odd-16th ticks
 
-    // seam glue: fresh sections and palette changes get transition FX
-    if (s16 === 0 && MUS.themeFx) { MUS.themeFx = false; musSwell(t); }
+    // seam glue: fresh sections and palette changes get transition FX.
+    // The swell rides the OLD bus and masks the gear change; the crossfade
+    // then hands the floor to the new palette.
+    if (s16 === 0 && MUS.themeFx) { MUS.themeFx = false; musSwell(t); musSwapBus(t); }
     if (s16 === 0 && MUS.glue) {
       const gl = MUS.glue; MUS.glue = null;
       if (gl.to === 'build') musSwell(t);
@@ -1016,6 +1052,7 @@
       if (q.qx === qx && q.qy === qy && G.mmo) {
         G.credits += 150; saveMMO();
         banner('QUADRANT CAPTURED', '+150 credits — held ground recharges your squad', 3);
+        contractProgress('hold');
       } else banner('QUADRANT ' + ref + ' TAKEN', 'your squad expands', 2.2);
     }
   }
@@ -1160,6 +1197,7 @@
             G.relics++; saveMMO();
             say('◆ Relic salvaged — rare tech for the upgrade bay (' + G.relics + ')', '#d9f');
             sndPrize(); tone('sine', 1320, 1980, 0.25, 0.12, 0.1);
+            contractProgress('relic');
             if (G.online) netSend({ t: 'relic', slot: e.slot });
           }
           break;
@@ -1207,6 +1245,9 @@
               const c = 30 + (e.bounty | 0);
               G.credits += c; saveMMO();
               say('+' + c + ' credits', '#fd8');
+              const vic = G.W.byId.get(e.victim);
+              contractProgress('hunt');
+              if (vic && vic.marauder) contractProgress('raid');
             }
           }
           matchScoreKill(e);
@@ -1216,7 +1257,18 @@
           if (mine && e.credit) {
             G.credits += 12; saveMMO();
             say('+12 credits (salvage)', '#fd8'); sndPrize();
+            contractProgress('salvage');
           } else if (mine) { say('Green: ' + e.name, '#ff6'); sndPrize(); }
+          break;
+        case 'cache':
+          spark(e.x, e.y, 45, 12, 170);
+          if (mine) {
+            const c = 20 + irand(16);
+            G.credits += c; saveMMO();
+            say('Derelict cache cracked — +' + c + ' credits', '#fd8');
+            sndPrize();
+            contractProgress('cache');
+          }
           break;
         case 'spawn':
           // upgrades survive death: reapply over the loadout reset
@@ -1417,6 +1469,7 @@
         applyUpgrades(me);
         me.energy = me.maxEnergy;
         G.quad = quadName(me.x, me.y);
+        contractsInit();
         SIM.drainEvents(G.W);
         G.mode = team ? 'online-teams' : 'online-ffa';
         const isCore = G.zoneMode === 'core';
@@ -1618,9 +1671,23 @@
       };
     };
     prerenderMap();
-    // the four squads wage their war with or without you
-    const bots = SIM.addBots(G.W, 20);
-    bots.forEach((b, i) => { b.team = [1, 2, 3, 4, 0][i % 5]; });
+    // The four squads wage their war with or without you. Half of them patrol
+    // assigned quadrants so the frontier is INHABITED — flying out into the
+    // deep should mean running into somebody, not touring an empty map.
+    const bots = SIM.addBots(G.W, 34);
+    const GR = SIM.GRID;
+    bots.forEach((b, i) => {
+      b.team = [1, 2, 3, 4, 0][i % 5];
+      if (i % 2 === 0) {
+        // spread patrols over the whole lattice, skipping the contested core
+        let q = (i * 7 + 3) % (GR * GR);
+        if (q === ((GR >> 1) * GR + (GR >> 1))) q = (q + 1) % (GR * GR);
+        b.ai.patrolQ = q;
+        const p = SIM.findClearNear(G.W, (q % GR + 0.5) * SIM.QUADPX, (((q / GR) | 0) + 0.5) * SIM.QUADPX);
+        if (p) { b.x = p.x; b.y = p.y; }
+      }
+    });
+    SIM.seedDeadZone(G.W, 5);   // the lawless quadrant is always hostile
     for (let i = 0; i < 60; i++) {
       const p = SIM.randClearPoint(G.W);
       SIM.addPrize(G.W, p.x, p.y);
@@ -1780,7 +1847,9 @@
         const tw = musThemeAt();
         if (tw !== MUS.twPend) { MUS.twPend = tw; MUS.twT = 0; }
         else MUS.twT += 0.1;
-        if (MUS.twT > 2 || tw === 'storm') MUS.themeWant = tw;
+        // 4s of stability: a palette change is a whole-arrangement event, so
+        // it must never chase a pilot weaving across a quadrant border
+        if (MUS.twT > 4 || tw === 'storm') MUS.themeWant = tw;
       }
     }
 
@@ -1825,6 +1894,11 @@
         if (qn !== G.quad) {
           if (G.quad) banner('ENTERING ' + qn, '', 2);
           G.quad = qn;
+        }
+        // surveying counts each quadrant once per contract cycle
+        if (G.mmo && G.charted.indexOf(qi) < 0) {
+          G.charted.push(qi);
+          contractProgress('survey');
         }
       }
     }
@@ -2880,6 +2954,30 @@
       }
     }
 
+    // derelict caches: dim amber salvage scattered through the deep
+    if (W.caches) {
+      for (const ch of W.caches) {
+        if (ch.taken > -1 && W.time - ch.taken < 90) continue;
+        if (ch.x < camL || ch.x > camR || ch.y < camT || ch.y > camB) continue;
+        const pu = 0.7 + 0.3 * Math.sin(G.time * 2 + ch.x * 0.01);
+        ctx.save();
+        ctx.translate(ch.x, ch.y);
+        ctx.globalCompositeOperation = 'lighter';
+        drawGlow(0, 0, 26 * pu, 42, 0.35);
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.strokeStyle = 'rgba(255,200,110,0.8)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(-7, -4); ctx.lineTo(0, -8); ctx.lineTo(7, -4);
+        ctx.lineTo(7, 5); ctx.lineTo(-3, 8); ctx.lineTo(-7, 3);
+        ctx.closePath();
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(255,230,170,0.4)';
+        ctx.beginPath(); ctx.moveTo(-7, 0); ctx.lineTo(7, 0); ctx.stroke();
+        ctx.restore();
+      }
+    }
+
     // relics: rare tech glinting in dangerous places
     if (W.relicSlots) {
       for (const sl of W.relicSlots) {
@@ -3268,7 +3366,8 @@
 
     // MMO layer: credits + the upgrade bay
     if (G.mmo) {
-      txt('¢ ' + G.credits + '  ·  ◆ ' + G.relics + '  ·  U upgrade bay', 20, narrow ? 104 : 126, narrow ? 10 : 12, '#fd8', 'left', 700);
+      txt('¢ ' + G.credits + '  ·  ◆ ' + G.relics + '  ·  U bay · J board', 20, narrow ? 104 : 126, narrow ? 10 : 12, '#fd8', 'left', 700);
+      drawContracts(narrow);
       if (G.upgOpen) drawUpgradeBay();
     }
 
@@ -3527,6 +3626,15 @@
         ctx.restore();
       }
     }
+    // caches show as faint amber specks — something to steer toward
+    if (G.W.caches) {
+      ctx.fillStyle = 'rgba(255,200,110,0.55)';
+      for (const ch of G.W.caches) {
+        if (ch.taken > -1 && G.W.time - ch.taken < 90) continue;
+        if (!on(ch.x, ch.y)) continue;
+        ctx.fillRect(rx + (ch.x - wx) * k - 1, ry + (ch.y - wy) * k - 1, 2, 2);
+      }
+    }
     // relics glint on the scanner
     if (G.W.relicSlots) {
       ctx.fillStyle = 'rgba(220,150,255,0.95)';
@@ -3615,6 +3723,38 @@
     }
     T.ui.back = { x: vw / 2 - 70, y: vh / 2 + 168, w: 140, h: 30 };
     txt('1-5 choose · ENTER keeps ' + (SIM.FACTIONS[G.zoneTeam] ? SIM.FACTIONS[G.zoneTeam].name : 'FREELANCER') + ' · ESC back', vw / 2, vh / 2 + 188, 12, '#678', 'center');
+  }
+
+  // the contract board: always-visible one-liners, or a full panel on J
+  function drawContracts(narrow) {
+    if (!G.contracts || !G.contracts.length) return;
+    const full = G.boardOpen;
+    const x = 14, w = full ? 320 : 250;
+    let y = (narrow ? 118 : 142);
+    if (full) {
+      panel(x - 4, y - 4, w + 8, 26 + G.contracts.length * 36);
+      txt('CONTRACT BOARD', x + 6, y + 13, 12, '#c8ecff', 'left', 800);
+      y += 24;
+    }
+    for (const ct of G.contracts) {
+      const def = contractDef(ct.k);
+      const done = ct.have >= ct.need;
+      const frac = clamp(ct.have / ct.need, 0, 1);
+      if (full) {
+        txt(def.n + ' — ' + def.d(ct.need), x + 6, y + 10, 11.5, done ? '#8f8' : '#cfe', 'left', 700);
+        txt('¢' + ct.pay, x + w - 6, y + 10, 11, '#fd8', 'right', 700);
+        ctx.fillStyle = 'rgba(255,255,255,0.10)';
+        ctx.fillRect(x + 6, y + 16, w - 12, 4);
+        ctx.fillStyle = done ? 'hsla(150,80%,55%,0.95)' : 'hsla(200,85%,60%,0.9)';
+        ctx.fillRect(x + 6, y + 16, (w - 12) * frac, 4);
+        txt(ct.have + '/' + ct.need, x + 6, y + 30, 9.5, '#789', 'left');
+        y += 36;
+      } else {
+        txt('◈ ' + def.n + ' ' + ct.have + '/' + ct.need, x + 6, y + 9, narrow ? 9.5 : 11,
+          done ? '#8f8' : 'rgba(190,215,245,0.75)', 'left', 600);
+        y += narrow ? 13 : 15;
+      }
+    }
   }
 
   function drawUpgradeBay() {
@@ -3908,12 +4048,69 @@
     try {
       const d = JSON.parse(GLOBAL.localStorage.getItem('interstellar-mmo') || '{}');
       G.credits = d.c | 0; G.relics = d.r | 0; G.upg = d.u || {}; G.zoneTeam = d.sq | 0;
-    } catch (e) { G.credits = 0; G.relics = 0; G.upg = {}; }
+      G.contracts = Array.isArray(d.ct) ? d.ct : [];
+      G.charted = Array.isArray(d.ch) ? d.ch : [];
+    } catch (e) { G.credits = 0; G.relics = 0; G.upg = {}; G.contracts = []; G.charted = []; }
   }
   function saveMMO() {
-    try { GLOBAL.localStorage.setItem('interstellar-mmo', JSON.stringify({ c: G.credits, r: G.relics, u: G.upg, sq: G.zoneTeam })); } catch (e) { }
+    try {
+      GLOBAL.localStorage.setItem('interstellar-mmo', JSON.stringify({
+        c: G.credits, r: G.relics, u: G.upg, sq: G.zoneTeam,
+        ct: G.contracts, ch: G.charted,
+      }));
+    } catch (e) { }
   }
   const WING_NAMES = { 1: 'TALON', 2: 'HALO', 3: 'CINDER', 4: 'SHADE' };
+
+  // ------------------------------------------------------------ contracts
+  // Objectives so the vastness always has a point: you carry three at a time,
+  // they complete from things you'd do anyway (fighting, salvaging, taking
+  // ground), they pay credits into the upgrade economy, and a finished one
+  // is immediately replaced. Progress persists with your pilot.
+  const CONTRACTS = [
+    { k: 'hunt', n: 'Hunt', d: n => 'destroy ' + n + ' hostile ships', min: 3, max: 7, pay: 30 },
+    { k: 'raid', n: 'Bounty', d: n => 'collect ' + n + ' marauder bount' + (n > 1 ? 'ies' : 'y'), min: 1, max: 3, pay: 90 },
+    { k: 'salvage', n: 'Salvage', d: n => 'salvage ' + n + ' drifting greens', min: 5, max: 12, pay: 14 },
+    { k: 'cache', n: 'Scavenge', d: n => 'crack ' + n + ' derelict caches', min: 3, max: 8, pay: 26 },
+    { k: 'relic', n: 'Recovery', d: n => 'recover ' + n + ' relic' + (n > 1 ? 's' : ''), min: 1, max: 2, pay: 260 },
+    { k: 'survey', n: 'Survey', d: n => 'chart ' + n + ' different quadrants', min: 3, max: 6, pay: 55 },
+    { k: 'hold', n: 'Conquest', d: n => 'help take ' + n + ' quadrant' + (n > 1 ? 's' : ''), min: 1, max: 2, pay: 200 },
+  ];
+  function rollContract() {
+    // squadless pilots can't take ground, so never hand them a Conquest
+    const pool = CONTRACTS.filter(c => c.k !== 'hold' || G.zoneTeam);
+    const c = pool[irand(pool.length)];
+    const need = c.min + irand(c.max - c.min + 1);
+    // a fresh survey starts from a blank chart, or an explorer who has already
+    // seen the sector could never complete one
+    if (c.k === 'survey') G.charted = [];
+    return { k: c.k, need, have: 0, pay: c.pay * need };
+  }
+  function contractsInit() {
+    if (!Array.isArray(G.contracts)) G.contracts = [];
+    while (G.contracts.length < 3) G.contracts.push(rollContract());
+    G.contracts.length = 3;
+  }
+  const contractDef = k => CONTRACTS.find(c => c.k === k) || CONTRACTS[0];
+  function contractProgress(kind, n) {
+    if (!G.mmo || !G.contracts) return;
+    let changed = false;
+    for (let i = 0; i < G.contracts.length; i++) {
+      const ct = G.contracts[i];
+      if (ct.k !== kind || ct.have >= ct.need) continue;
+      ct.have = Math.min(ct.need, ct.have + (n || 1));
+      changed = true;
+      if (ct.have >= ct.need) {
+        const def = contractDef(ct.k);
+        G.credits += ct.pay;
+        banner('CONTRACT COMPLETE', def.n + ' — +' + ct.pay + ' credits', 2.6);
+        say('Contract complete: ' + def.n + ' · +' + ct.pay + ' credits', '#8f8');
+        sndPrize();
+        G.contracts[i] = rollContract();
+      }
+    }
+    if (changed) saveMMO();
+  }
 
   // ------------------------------------------------------------ upgrades
   // The Zone's power curve: no lucky greens — you SALVAGE credits from
@@ -4054,6 +4251,8 @@
       const F = SIM.FACTIONS[G.zoneTeam];
       say(F ? 'You fly for the ' + F.name + ' — the mothership shields its own.' : 'Freelancer: no squad, no masters, all salvage is yours.', '#8df');
       say('Salvage greens for credits · press U for the upgrade bay.', '#fd8');
+      contractsInit();
+      say('Contracts posted — press J for the board.', '#8fd4a8');
       // your wing forms up: squadmates who fly WITH you
       if (G.zoneTeam) {
         const mates = G.W.ships.filter(b => b.bot && b.team === G.zoneTeam && !b.marauder).slice(0, 2);
@@ -4163,7 +4362,7 @@
 
   const HANDLED = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab',
     'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'Enter', 'Backspace', 'Escape',
-    'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyB', 'KeyE', 'KeyQ', 'KeyR', 'KeyT', 'KeyM', 'KeyN', 'KeyP', 'KeyF', 'KeyO', 'KeyU']);
+    'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyB', 'KeyE', 'KeyQ', 'KeyR', 'KeyT', 'KeyM', 'KeyN', 'KeyP', 'KeyF', 'KeyO', 'KeyU', 'KeyJ']);
 
   function onKeyDown(e) {
     audioInit();
@@ -4220,6 +4419,11 @@
     if (code === 'KeyF') { toggleFullscreen(); return; }
     if (code === 'KeyU' && G.mmo && G.state === 'play' && !G.chatOpen) {
       G.upgOpen = !G.upgOpen;
+      e.preventDefault();
+      return;
+    }
+    if (code === 'KeyJ' && G.mmo && G.state === 'play' && !G.chatOpen) {
+      G.boardOpen = !G.boardOpen;
       e.preventDefault();
       return;
     }
@@ -4422,9 +4626,26 @@
     musicInit();
     const save = SFX.musBus.gain.value;
     const st = { step: MUS.step, heat: MUS.heat, pulse: MUS.pulse, sec: MUS.sec, secBar: MUS.secBar, secLen: MUS.secLen, bar: MUS.bar, prog: MUS.prog, started: MUS.started, dropImpact: MUS.dropImpact, glue: MUS.glue, theme: MUS.theme, themeWant: MUS.themeWant, themeFx: MUS.themeFx };
-    SFX.musBus.gain.value = 0;
     const t0 = SFX.ctx.currentTime + 0.1;
     const N = 64 * 16 * 4, visited = new Set(), themes = ['frontier', 'core', 'home', 'storm'];
+    // the sweep schedules ~4s of real audio: hold the master down for that
+    // whole window, not just for the synchronous scheduling loop
+    const quietUntil = t0 + N * 0.001 + 2;
+    try {
+      SFX.musBus.gain.cancelScheduledValues(SFX.ctx.currentTime);
+      SFX.musBus.gain.setValueAtTime(0, SFX.ctx.currentTime);
+      SFX.musBus.gain.setValueAtTime(save, quietUntil);
+    } catch (e) { SFX.musBus.gain.value = 0; }
+    const restore = () => {
+      Object.assign(MUS, st);
+      // leave the crossfade buses in a sane state after the palette sweep
+      try {
+        const now = SFX.ctx.currentTime;
+        SFX.busA.gain.cancelScheduledValues(now); SFX.busA.gain.setValueAtTime(1, quietUntil);
+        SFX.busB.gain.cancelScheduledValues(now); SFX.busB.gain.setValueAtTime(0, quietUntil);
+      } catch (e) { }
+      SFX.out = SFX.busA;
+    };
     let n = 0;
     try {
       for (let s = 0; s < N; s++) {
@@ -4435,11 +4656,10 @@
         n++;
       }
     } catch (e) {
-      Object.assign(MUS, st); SFX.musBus.gain.value = save;
+      restore();
       return 'THREW at step ' + n + ': ' + e;
     }
-    Object.assign(MUS, st);
-    SFX.musBus.gain.value = save;
+    restore();
     const themesHit = new Set([...visited].map(v => v.split(':')[0]));
     return 'scheduled ' + n + ' steps clean, themes: ' + [...themesHit].sort().join(',') +
       ', sections: ' + new Set([...visited].map(v => v.split(':')[1])).size + '/4';

@@ -210,7 +210,42 @@ const SIM = require(path.join(ROOT, 'sim.js'));
       if (E && E.type === 'marauders') { SIM.updateWorld(Wt, SIM.STEP); found = Wt.ships.find(s => s.marauder); }
     }
     assert(found && found.team === 5, 'marauder raid spawns hostile-to-all raiders');
-    console.log('OK  war economy: capture, relics, wing escort, event timeline, marauders');
+    // derelict caches: dense, salvageable, and they fire a pickup event
+    assert(Wt.caches && Wt.caches.length > 100, 'derelict caches populate the frontier');
+    const scav = SIM.makeShip(Wt, 'comet', 'local', 'Scav');
+    SIM.spawnShip(Wt, scav);
+    scav.noGreens = true;
+    const cache0 = Wt.caches[0];
+    scav.x = cache0.x; scav.y = cache0.y; scav.vx = 0; scav.vy = 0; scav.dead = false;
+    SIM.updateWorld(Wt, SIM.STEP);
+    assert(SIM.drainEvents(Wt).some(e => e.e === 'cache'), 'flying over a derelict cache salvages it');
+    // the Dead Zone keeps a standing pirate presence
+    assert(SIM.seedDeadZone(Wt, 4).every(m => m.marauder && m.team === 5), 'dead zone seeds marauders');
+    console.log('OK  war economy: capture, relics, caches, wing escort, events, marauders');
+  }
+
+  // bomb identity: ricochet is a HULL TRAIT, and the fuse is generous
+  {
+    const Wb = SIM.createWorld({ seed: 21 });
+    const mk = type => {
+      const s = SIM.makeShip(Wb, type, 'bot', type);
+      SIM.spawnShip(Wb, s);
+      // spawn rolls two random greens — pin the loadout so the comparison
+      // measures the formula, not the dice
+      SIM.applyLoadoutDefaults(s);
+      s.energy = s.maxEnergy; s.bombCd = 0;
+      const before = Wb.bombs.length;
+      SIM.fireBomb(Wb, s);
+      assert(Wb.bombs.length === before + 1, type + ' fired a bomb');
+      return Wb.bombs[Wb.bombs.length - 1];
+    };
+    const pal = mk('paladin'), cor = mk('corsair'), tit = mk('titan');
+    assert(pal.bounces === 3, 'the Paladin alone ricochets its bombs (' + pal.bounces + ')');
+    assert(cor.bounces === 0 && tit.bounces === 0, 'other hulls detonate on the wall they hit');
+    assert(cor.prox >= 35, 'base proximity fuse is generous (' + cor.prox + ')');
+    assert(tit.prox > cor.prox, 'heavier bombs carry a wider fuse');
+    SIM.drainEvents(Wb);
+    console.log('OK  bombs: ricochet is a hull trait, fuse radius is forgiving');
   }
 
   // map styles: deterministic per seed, distinct per style
@@ -275,13 +310,14 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     const pa = SIM.makeShip(Wc, 'paladin', 'local', 'P', 210, 0);
     pa.x = sp.x; pa.y = sp.y; pa.bombCd = 0;
     SIM.fireBomb(Wc, pa);
-    assert(Wc.bombs[0].bounces === 1 + 2, 'paladin bombs get +2 ricochets');
-    assert(Wc.bombs[0].prox === 12 + 5, 'base bombs have a tight fuse');
+    assert(Wc.bombs[0].bounces === 3, 'paladin bombs ricochet (hull trait, not universal)');
+    assert(Wc.bombs[0].prox === 30 + 9, 'base fuse is forgiving');
 
     const me2 = SIM.makeShip(Wc, 'meteor', 'local', 'M', 18, 0);
     me2.x = sp.x; me2.y = sp.y; me2.bombCd = 0;
     SIM.fireBomb(Wc, me2);
-    assert(Wc.bombs[1].prox === 12 + 10 + 22, 'meteor factory prox fuse widens detonation');
+    assert(Wc.bombs[1].prox === 30 + 18 + 28, 'meteor factory prox fuse widens detonation');
+    assert(Wc.bombs[1].bounces === 0, 'the bomber does NOT ricochet — that is the Paladin\'s trade');
     assert(SIM.PRIZE_TYPES.some(p => p.n === 'Proximity Fuse'), 'proximity is a green');
     assert(SIM.SHIP_TYPES.hornet.radarStealth, 'hornet is a sensor ghost');
 
@@ -413,7 +449,9 @@ const SIM = require(path.join(ROOT, 'sim.js'));
   assert(api, 'client exported hooks');
   const { G, startSolo, update, render, STEP } = api;
   assert(G.state === 'title', 'client boots to title');
-  assert(G.W.ships.length === 20, 'attract-mode bots exist');
+  assert(G.W.ships.length >= 34, 'the zone is populated (' + G.W.ships.length + ' ships)');
+  assert(G.W.ships.some(s => s.ai && s.ai.patrolQ != null), 'patrols work the frontier quadrants');
+  assert(G.W.ships.some(s => s.marauder), 'the dead zone holds a standing pirate presence');
   for (let i = 0; i < 240; i++) update(STEP);
   render();
 
