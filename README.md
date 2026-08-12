@@ -341,16 +341,24 @@ A new generation of hulls joins the fleet — each with a mechanic all its own:
 | `←` `→` | Rotate |
 | `A` / `D` | Strafe left / right |
 | `Space` / `Ctrl` | Guns — all bullets ricochet off walls |
-| `Tab` / `Shift` | Bomb |
+| `Shift` / `B` | Bomb |
 | `E` | Repel |
 | `Q` | Burst |
 | `R` | Rocket (Blink on the Phantom) |
 | `T` | Warp to your team's Comet |
+| `Tab` (hold) | Standings — live top 14 with kills and deaths |
 | `Enter` | Chat (online) — `/duel` `/accept` `/stats` `/votemap` `/help`, `//` for team |
 | `P` / `Esc` | Pause / menu |
+| `K` | **Rebind controls** — every key above is remappable |
 | `U` / `J` | Upgrade bay / contract board (The Zone and online) |
 | `G` | Dock with / launch from your squad's carrier |
 | `M` | Mute all · `N` Music on/off · `F` Fullscreen |
+
+Every flight and weapon key is remappable from the controls screen (`K`, or
+from the pause menu): `↑` `↓` to pick an action, `Enter` to capture the next
+key you press, `Shift`+`R` to restore defaults. A key only ever serves one
+action — binding it somewhere new takes it away from wherever it was. Your
+layout is saved in the browser.
 
 ## Architecture
 

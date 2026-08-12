@@ -28,6 +28,7 @@
     // MMO layer: squad allegiance, credits, permanent upgrades, quadrant
     zoneTeam: 0, credits: 0, relics: 0, upg: {}, mmo: false, upgOpen: false, quad: '', quadIdx: -1, evtSeen: -1,
     contracts: [], charted: [],
+    ctlOpen: false, bindSel: 0, bindWait: false,
     mode: 'ffa', pendingMode: 'squad', match: null,
     banner: null, lastKillT: -99, combo: 0, duelW: 0, duelL: 0,
     demoT: 0, demoShip: null,
@@ -3675,6 +3676,7 @@
       ctx.fillRect(0, 0, vw, vh);
       ctx.globalAlpha = 1;
     }
+    if (held('scores') && !G.ctlOpen) drawScoreboard();
   }
 
   function drawTouchUI() {
@@ -3869,6 +3871,53 @@
     }
     T.ui.back = { x: vw / 2 - 70, y: vh / 2 + 168, w: 140, h: 30 };
     txt('1-5 choose · ENTER keeps ' + (SIM.FACTIONS[G.zoneTeam] ? SIM.FACTIONS[G.zoneTeam].name : 'FREELANCER') + ' · ESC back', vw / 2, vh / 2 + 188, 12, '#678', 'center');
+  }
+
+  // Controls screen (K): every action is rebindable, and a key can only
+  // serve one action — claiming it takes it from whoever held it.
+  function drawControls() {
+    ctx.fillStyle = 'rgba(4,6,13,0.86)';
+    ctx.fillRect(0, 0, vw, vh);
+    txt('CONTROLS', vw / 2, 60, 30, '#c8ecff', 'center', 800);
+    txt('↑↓ choose · ENTER rebind · SHIFT+R defaults · K or ESC back',
+      vw / 2, 84, 12, '#89a', 'center');
+    const rows = BIND_ORDER.length;
+    const colH = Math.min(30, (vh - 150) / rows);
+    const w = Math.min(460, vw - 40), x = vw / 2 - w / 2;
+    let y = 108;
+    for (let i = 0; i < rows; i++) {
+      const [act, label] = BIND_ORDER[i];
+      const sel = i === G.bindSel;
+      if (sel) {
+        ctx.fillStyle = 'rgba(80,150,255,0.18)';
+        ctx.fillRect(x - 6, y - 2, w + 12, colH - 2);
+      }
+      txt((sel ? '▸ ' : '  ') + label, x, y + colH * 0.62, 13.5, sel ? '#cfe' : '#9ab', 'left', sel ? 700 : 600);
+      const waiting = sel && G.bindWait;
+      txt(waiting ? 'press a key…' : (bindLabel(act) || '—'),
+        x + w, y + colH * 0.62, 13, waiting ? '#fd8' : '#8fd4a8', 'right', 700);
+      y += colH;
+    }
+  }
+
+  // hold the standings key for the full board
+  function drawScoreboard() {
+    const list = G.W.ships.slice().sort((a, b) => b.score - a.score).slice(0, 14);
+    const w = 420, x = vw / 2 - w / 2, h = 46 + list.length * 20;
+    const y0 = Math.max(40, vh / 2 - h / 2);
+    panel(x, y0, w, h);
+    txt('ZONE STANDINGS', x + 14, y0 + 24, 15, '#c8ecff', 'left', 800);
+    txt('K / D', x + w - 14, y0 + 24, 11, '#68a', 'right', 700);
+    let y = y0 + 44;
+    for (const s of list) {
+      const me = s === G.player;
+      const F = s.team && SIM.FACTIONS[s.team];
+      txt((me ? '▸ ' : '') + s.name, x + 14, y + 12, 12.5,
+        me ? '#fff' : F ? 'hsl(' + F.hue + ',80%,72%)' : s.marauder ? '#f96' : '#bcd', 'left', me ? 800 : 600);
+      txt(String(s.score), x + w - 96, y + 12, 12, '#fd8', 'right', 700);
+      txt(s.kills + ' / ' + s.deaths, x + w - 14, y + 12, 11.5, '#9ab', 'right');
+      y += 20;
+    }
   }
 
   // the contract board: always-visible one-liners, or a full panel on J
@@ -4129,17 +4178,20 @@
     ctx.fillStyle = 'rgba(4,6,13,0.7)';
     ctx.fillRect(0, 0, vw, vh);
     txt(G.online ? 'MENU  (the zone keeps fighting)' : 'PAUSED', vw / 2, vh / 2 - 120, 34, '#c8ecff', 'center', 800);
+    // read the live bindings so the menu never lies about your keys
     const lines = [
-      '← →            rotate',
-      'W / ↑            thrust        S / ↓   reverse',
-      'A / D            strafe left / right',
-      'SPACE / CTRL   guns (bullets always ricochet)',
-      'TAB / SHIFT    bomb',
-      'E repel   Q burst   R rocket/blink   T warp-to-Comet',
-      'ENTER          chat · /duel <name> · /votemap · /stats',
-      'M mute         N music        F fullscreen',
+      bindLabel('left') + ' / ' + bindLabel('right') + '   rotate',
+      bindLabel('thrust') + '   thrust      ' + bindLabel('reverse') + '   reverse',
+      bindLabel('strafeL') + ' / ' + bindLabel('strafeR') + '   strafe',
+      bindLabel('gun') + '   guns (bullets always ricochet)',
+      bindLabel('bomb') + '   bomb',
+      bindLabel('repel') + ' repel   ' + bindLabel('burst') + ' burst   ' +
+        bindLabel('special') + ' rocket/blink   ' + bindLabel('warp') + ' warp',
+      bindLabel('dock') + ' dock   ' + bindLabel('bay') + ' bay   ' +
+        bindLabel('board') + ' contracts   ' + bindLabel('scores') + ' standings',
+      'ENTER chat · M mute · N music · F fullscreen',
       '',
-      'P resume    ·    BACKSPACE abandon to title',
+      'K rebind controls   ·   P resume   ·   BACKSPACE abandon',
     ];
     let y = vh / 2 - 70;
     for (const l of lines) { txt(l, vw / 2 - 160, y, 14, '#abc', 'left', 500); y += 24; }
@@ -4168,7 +4220,8 @@
     else if (G.state === 'error') drawError();
     else if (G.state === 'play') {
       drawHUD();
-      if (G.paused) drawPause();
+      if (G.ctlOpen) drawControls();
+      else if (G.paused) drawPause();
     }
   }
 
@@ -4447,6 +4500,58 @@
     G.paused = false;
   }
 
+  // ---------------------------------------------------------------- binds
+  // Every action is a named binding, not a hardcoded key, so anything can be
+  // reassigned from the controls screen (K while paused) and remembered.
+  const BIND_ORDER = [
+    ['thrust', 'Thrust'], ['reverse', 'Reverse thrust'],
+    ['left', 'Rotate left'], ['right', 'Rotate right'],
+    ['strafeL', 'Strafe left'], ['strafeR', 'Strafe right'],
+    ['gun', 'Guns'], ['bomb', 'Bomb'],
+    ['repel', 'Repel'], ['burst', 'Burst'], ['special', 'Rocket / Blink'],
+    ['warp', 'Warp to Comet'], ['dock', 'Dock / launch'],
+    ['bay', 'Upgrade bay'], ['board', 'Contract board'], ['scores', 'Standings (hold)'],
+  ];
+  const DEFAULT_BINDS = {
+    thrust: ['ArrowUp', 'KeyW'], reverse: ['ArrowDown', 'KeyS'],
+    left: ['ArrowLeft'], right: ['ArrowRight'],
+    strafeL: ['KeyA'], strafeR: ['KeyD'],
+    gun: ['Space', 'ControlLeft', 'ControlRight'],
+    // Shift is THE bomb key; B is the alternate. Tab is no longer a weapon.
+    bomb: ['ShiftLeft', 'ShiftRight', 'KeyB'],
+    repel: ['KeyE'], burst: ['KeyQ'], special: ['KeyR'], warp: ['KeyT'],
+    dock: ['KeyG'], bay: ['KeyU'], board: ['KeyJ'], scores: ['Tab'],
+  };
+  let BINDS = {};
+  function loadBinds() {
+    BINDS = {};
+    for (const k in DEFAULT_BINDS) BINDS[k] = DEFAULT_BINDS[k].slice();
+    try {
+      const d = JSON.parse(GLOBAL.localStorage.getItem('interstellar-binds') || '{}');
+      for (const k in BINDS) if (Array.isArray(d[k]) && d[k].length) BINDS[k] = d[k].slice(0, 3);
+    } catch (e) { }
+  }
+  function saveBinds() {
+    try { GLOBAL.localStorage.setItem('interstellar-binds', JSON.stringify(BINDS)); } catch (e) { }
+  }
+  const held = a => { const b = BINDS[a]; for (let i = 0; i < b.length; i++) if (keys[b[i]]) return true; return false; };
+  const isAct = (code, a) => BINDS[a].indexOf(code) >= 0;
+  // pretty key names for the controls screen
+  function keyName(code) {
+    if (!code) return '—';
+    return code
+      .replace(/^Key/, '').replace(/^Digit/, '').replace(/^Arrow/, '')
+      .replace('ControlLeft', 'L-Ctrl').replace('ControlRight', 'R-Ctrl')
+      .replace('ShiftLeft', 'L-Shift').replace('ShiftRight', 'R-Shift')
+      .replace('Space', 'Space');
+  }
+  const bindLabel = a => BINDS[a].map(keyName).join(' / ');
+  // keys the game consumes (so the browser doesn't act on them)
+  function isHandledCode(code) {
+    for (const k in BINDS) if (BINDS[k].indexOf(code) >= 0) return true;
+    return HANDLED.has(code);
+  }
+
   // ---------------------------------------------------------------- input
   // Precision flight: digital keys don't slam straight to a hull's full
   // authority. Each control ramps from a fine-adjustment fraction up to
@@ -4472,14 +4577,15 @@
     }
     const c = p.ctl;
     // hold timers: how long each control has been engaged
-    const L = keys.ArrowLeft, R = keys.ArrowRight;
-    const fw = keys.ArrowUp || keys.KeyW, bk = keys.ArrowDown || keys.KeyS;
+    const L = held('left'), R = held('right');
+    const fw = held('thrust'), bk = held('reverse');
+    const sL = held('strafeL'), sR = held('strafeR');
     HOLD.l = L ? HOLD.l + dt : 0;
     HOLD.r = R ? HOLD.r + dt : 0;
     HOLD.f = fw ? HOLD.f + dt : 0;
     HOLD.b = bk ? HOLD.b + dt : 0;
-    HOLD.sl = keys.KeyA ? HOLD.sl + dt : 0;
-    HOLD.sr = keys.KeyD ? HOLD.sr + dt : 0;
+    HOLD.sl = sL ? HOLD.sl + dt : 0;
+    HOLD.sr = sR ? HOLD.sr + dt : 0;
     // agility from the hull's own turn rate: snappy ships ramp up faster
     const ag = clamp((p.t.turn - 2.2) / 2, 0, 1);
     const tT = 0.26 - 0.12 * ag;    // time to full turn authority
@@ -4487,9 +4593,9 @@
     // arrows rotate + thrust (classic); A/D strafe sideways; W/S also thrust
     c.turn = (L ? -holdRamp(HOLD.l, tT, 0.32) : 0) + (R ? holdRamp(HOLD.r, tT, 0.32) : 0);
     c.thrust = fw ? holdRamp(HOLD.f, hT, 0.55) : bk ? -holdRamp(HOLD.b, hT, 0.55) : 0;
-    c.strafe = (keys.KeyA ? -holdRamp(HOLD.sl, hT, 0.55) : 0) + (keys.KeyD ? holdRamp(HOLD.sr, hT, 0.55) : 0);
-    c.gun = !!(keys.Space || keys.ControlLeft || keys.ControlRight);
-    c.bomb = !!(keys.Tab || keys.ShiftLeft || keys.ShiftRight || keys.KeyB);
+    c.strafe = (sL ? -holdRamp(HOLD.sl, hT, 0.55) : 0) + (sR ? holdRamp(HOLD.sr, hT, 0.55) : 0);
+    c.gun = held('gun');
+    c.bomb = held('bomb');
     // virtual stick: point the nub, the ship turns and burns that way
     if (T.active) {
       if (T.stick) {
@@ -4507,9 +4613,9 @@
     }
   }
 
-  const HANDLED = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab',
-    'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'Enter', 'Backspace', 'Escape',
-    'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyB', 'KeyE', 'KeyQ', 'KeyR', 'KeyT', 'KeyM', 'KeyN', 'KeyP', 'KeyF', 'KeyO', 'KeyU', 'KeyJ', 'KeyG']);
+  // menu/system keys the game always consumes; per-action keys come from BINDS
+  const HANDLED = new Set(['Enter', 'Backspace', 'Escape', 'Tab',
+    'KeyM', 'KeyN', 'KeyP', 'KeyF', 'KeyO', 'KeyK']);
 
   function onKeyDown(e) {
     audioInit();
@@ -4536,6 +4642,37 @@
       else if (e.key && e.key.length === 1 && G.chatStr.length < 120) G.chatStr += e.key;
       return;
     }
+
+    // controls screen: capture the next key for the selected action
+    if (G.ctlOpen) {
+      e.preventDefault();
+      if (G.bindWait) {
+        if (code !== 'Escape') {
+          const act = BIND_ORDER[G.bindSel][0];
+          // a key can only drive one action — take it from whoever had it
+          for (const k in BINDS) {
+            const i = BINDS[k].indexOf(code);
+            if (i >= 0 && BINDS[k].length > 1) BINDS[k].splice(i, 1);
+            else if (i >= 0) BINDS[k] = [];
+          }
+          BINDS[act] = [code];
+          saveBinds();
+          say(BIND_ORDER[G.bindSel][1] + ' → ' + keyName(code), '#8f8');
+        }
+        G.bindWait = false;
+        return;
+      }
+      if (code === 'Escape' || code === 'KeyK') { G.ctlOpen = false; return; }
+      if (code === 'ArrowUp') G.bindSel = (G.bindSel + BIND_ORDER.length - 1) % BIND_ORDER.length;
+      else if (code === 'ArrowDown') G.bindSel = (G.bindSel + 1) % BIND_ORDER.length;
+      else if (code === 'Enter' || code === 'Space') G.bindWait = true;
+      else if (code === 'KeyR' && e.shiftKey) {
+        for (const k in DEFAULT_BINDS) BINDS[k] = DEFAULT_BINDS[k].slice();
+        saveBinds();
+        say('Controls reset to defaults.', '#8df');
+      }
+      return;
+    }
     if (G.state === 'nameentry') {
       e.preventDefault();
       if (code === 'Enter') {
@@ -4548,13 +4685,13 @@
       return;
     }
 
-    if (HANDLED.has(code) || (e.key && e.key.startsWith('Arrow'))) e.preventDefault();
-    const held = !!keys[code];
+    if (isHandledCode(code) || (e.key && e.key.startsWith('Arrow'))) e.preventDefault();
+    const wasHeld = !!keys[code];
     keys[code] = true;
     // also register by key name — numpad arrows (NumLock off) report
     // code "Numpad4" but key "ArrowLeft", and must still steer
     if (e.key && e.key.length > 1) keys[e.key] = true;
-    if (held) return;
+    if (wasHeld) return;
 
     if (code === 'KeyM') { G.muted = !G.muted; say(G.muted ? 'Sound muted' : 'Sound on', '#8df'); return; }
     if (code === 'KeyN') {
@@ -4564,17 +4701,18 @@
       return;
     }
     if (code === 'KeyF') { toggleFullscreen(); return; }
-    if (code === 'KeyU' && G.mmo && G.state === 'play' && !G.chatOpen) {
+    if (code === 'KeyK' && G.state === 'play') { G.ctlOpen = true; G.bindWait = false; return; }
+    if (isAct(code, 'bay') && G.mmo && G.state === 'play' && !G.chatOpen) {
       G.upgOpen = !G.upgOpen;
       e.preventDefault();
       return;
     }
-    if (code === 'KeyJ' && G.mmo && G.state === 'play' && !G.chatOpen) {
+    if (isAct(code, 'board') && G.mmo && G.state === 'play' && !G.chatOpen) {
       G.boardOpen = !G.boardOpen;
       e.preventDefault();
       return;
     }
-    if (code === 'KeyG' && G.state === 'play' && !G.chatOpen && G.player) {
+    if (isAct(code, 'dock') && G.state === 'play' && !G.chatOpen && G.player) {
       if (G.player.docked) SIM.undockShip(G.W, G.player);
       else if (!SIM.dockShip(G.W, G.player)) say('No carrier in docking range.', '#f88');
       e.preventDefault();
@@ -4639,13 +4777,14 @@
         if (code === 'Backspace') leaveToTitle();
         return;
       }
+      if (isAct(code, 'scores')) return;   // hold-to-view, handled in the HUD
       if (code === 'Enter' && G.online) { G.chatOpen = true; G.chatStr = ''; return; }
       const p = G.player;
       if (!p || p.dead) return;
-      if (code === 'KeyE') SIM.doRepel(G.W, p);
-      else if (code === 'KeyQ') SIM.doBurst(G.W, p);
-      else if (code === 'KeyR') { if (p.t.blink) SIM.doBlink(G.W, p); else SIM.fireRocket(G.W, p); }
-      else if (code === 'KeyT') SIM.warpToBeacon(G.W, p);
+      if (isAct(code, 'repel')) SIM.doRepel(G.W, p);
+      else if (isAct(code, 'burst')) SIM.doBurst(G.W, p);
+      else if (isAct(code, 'special')) { if (p.t.blink) SIM.doBlink(G.W, p); else SIM.fireRocket(G.W, p); }
+      else if (isAct(code, 'warp')) SIM.warpToBeacon(G.W, p);
     }
   }
   function onKeyUp(e) {
@@ -4727,6 +4866,7 @@
     ctx = canvas.getContext('2d');
     loadBest();
     loadMMO();
+    loadBinds();
     resize();
     initBackdrop();
     newSoloWorld();
