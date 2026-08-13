@@ -328,32 +328,32 @@ A new generation of hulls joins the fleet — each with a mechanic all its own:
 - **All audio is synthesized live — zero asset files.** Sound effects (guns,
   bombs, explosions, repels, blinks, bounces, low-energy warnings) are
   WebAudio-generated with distance attenuation, and the soundtrack is
-  **adaptive generative rave electronica with four regional palettes** —
-  the score has two axes: WHERE you are picks the palette, the fight
-  picks the intensity. **Frontier** (deep space): the A-minor home
-  identity at 126 BPM. **Home** (your squad's own quadrant): relative-
-  major warmth at 112 BPM, bell-heavy, soft kick, no acid — a safe
-  harbor. **Core** (the contested core, or any *enemy* squad's space):
-  phrygian ♭II war harmony at 132 BPM. **Storm** (the Maelstrom):
-  diminished clusters at 138 BPM over a saw drone, dissonant chimes,
-  an acid line that runs diminished and never lets up. The same
-  two-bar theme hook threads through every palette (A minor being
-  C major's relative), and palette changes wait for a musical seam —
-  except the storm, which takes over immediately. Under all of it, a
-  music director reads the fight — enemy proximity, hits, kills — into
-  a live intensity and steers the arrangement bar by bar. Cruise empty space and it stays
-  ambient (detuned pads, glass bells whispering the theme, space echo);
-  contact closes in and an eight-bar build starts climbing — accelerating
-  snare rolls, a four-bar riser, the filter opening; then the **drop**:
-  punchy four-on-the-floor kick, rolling sub-layered bass with passing
-  tones, shaker groove with swing, claps, ghost snares, tom fills, and
-  eight-bar turns alternating between a resonant acid lead with rave stabs
-  and a **supersaw anthem playing the theme** over rave piano jabs. While
-  the fight rages the drop keeps extending itself; when it's over, a
-  weightless breakdown. An ambush can cut a quiet passage straight into
-  the build. Chord progressions rotate on every ride up, glued by a bus
-  compressor. Toggle with `N` (remembered between sessions), mute all
-  with `M`.
+  **uplifting space trance** — one musical identity for the whole game:
+  A minor, 138 BPM, four-on-the-floor with **offbeat bass**, wide add9
+  saw pads, **six-voice detuned supersaws** panned across the stereo
+  field, and a **sidechain pump** — every kick ducks the entire tonal
+  stem and it swells back between beats. A music director reads the
+  fight — enemy proximity, hits, kills — into a live intensity and
+  steers the arrangement bar by bar: cruise empty space and it stays
+  weightless (pads, glass bells whispering the game's two-bar theme,
+  dotted-8th space echo); contact closes in and an eight-bar build
+  climbs — the offbeat bass arrives, the arp's filter opens, a riser
+  sweeps four octaves into an accelerating snare roll; then the
+  **drop**, riding eight-bar turns that alternate the **supersaw anthem**
+  (the theme, long proud notes over rave piano jabs) with a
+  filter-breathing **arp ride**. While the fight rages the drop keeps
+  extending itself; when it's over, a crash washes out into a
+  breakdown. An ambush can cut a quiet passage straight into the build.
+  WHERE you are only **tints** the sound — filter brightness, echo
+  feedback, and an acid bite in the Maelstrom and the Dead Zone — and
+  never changes the key, the tempo, or the instruments, so every
+  transition lands as music instead of a gear change (the old engine
+  swapped whole palettes in different keys and tempos as you flew,
+  which is exactly what garbled it). Chord progressions rotate on every
+  ride up, glued by a bus compressor. `node dev/music-verify.js`
+  renders the full arc offline and asserts on the samples: no clipping,
+  no dropout windows, the drop actually hitting harder than the calm.
+  Toggle with `N` (remembered between sessions), mute all with `M`.
 - AI pilots with target leading, wall avoidance, dodging, fleeing, repel/burst
   usage, and prize hunting — the zone fights on with or without you (watch the
   attract mode behind the title screen).
@@ -403,12 +403,14 @@ layout is saved in the browser.
 | `dev/visual.js` | Pixel assertions the sim suite structurally cannot make — bakes the real sprites in Chromium and checks hull silhouettes, the contract board, and that a frame actually paints. |
 | `dev/perf.js` | Frame-rate harness. Drives real scenes on a **pinned world seed** and measures presented frames, so an A/B compares the same terrain rather than two dice rolls. |
 | `dev/shots.js` | Screenshot capture. Every image in this README is a real frame of the real client — no mockups, no compositing. |
+| `dev/music-verify.js` | Renders the soundtrack's full arrangement arc through an OfflineAudioContext and asserts on the SAMPLES — no clipping, no dropouts in the groove, the drop measurably hitting harder than the calm in the bands that matter — then writes the excerpt as a WAV a human can judge. |
 
 ```sh
 node dev/smoke.js         # sim, client and server layers
 node dev/visual.js        # pixel-level art regressions
 node dev/perf.js          # fps per scene, desktop and phone viewports
 node dev/shots.js         # regenerate assets/*.png
+node dev/music-verify.js  # render + measure the soundtrack, write a WAV
 node dev/build.js         # bundle everything into interstellar.html
 ```
 
