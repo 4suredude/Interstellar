@@ -59,6 +59,15 @@ async function main() {
     const A = window.__interstellar;
     A.audio.init();                    // SFX.ctx = the offline context
     A.audio.musicInit();               // buses, compressor, delay
+    // HERMETIC RENDER: while startRendering is awaited the page's live loop
+    // keeps running — the offline context reports state 'running', so the
+    // 100ms musicTick starts injecting ITS OWN steps into the render, and
+    // the title screen's attract battle plays sound effects into it too.
+    // The slower the machine, the longer the render, the more contamination
+    // — which is exactly why a loaded server measured worse than a fast dev
+    // box on identical code. Mute both paths: every voice guards on them.
+    A.MUS.on = false;
+    A.G.muted = true;
     const SD = A.audio.STEP16;
     const MUS = A.MUS;
 
@@ -197,8 +206,8 @@ async function main() {
   assert(res.dropouts === 0, 'the music never stops in the groove: ' + res.dropouts + ' spans of 300ms below -44 dB (quietest 100ms: ' + res.minWinDb + ' dB at ' + res.minAt + 's — sidechain troughs are expected)');
   console.log('bands: low calm ' + res.calmLo + ' → drop ' + res.dropLo +
     ' dB · high calm ' + res.calmHi + ' → drop ' + res.dropHi + ' dB');
-  assert(res.dropLo > res.calmLo + 4, 'the drop floor hits: low band +' + (res.dropLo - res.calmLo).toFixed(1) + ' dB over calm (need +4)');
-  assert(res.dropHi > res.calmHi - 1, 'the drop keeps its air: high band ' + (res.dropHi - res.calmHi).toFixed(1) + ' dB vs calm (must not be duller than -1)');
+  assert(res.dropLo > res.calmLo + 6, 'the drop floor hits: low band +' + (res.dropLo - res.calmLo).toFixed(1) + ' dB over calm (need +6)');
+  assert(res.dropHi > res.calmHi + 2, 'the drop sparkles: high band +' + (res.dropHi - res.calmHi).toFixed(1) + ' dB over calm (need +2)');
   let seamOk = true;
   for (const s of res.seams)
     if (Math.abs(s.postDb - s.preDb) > 12 && s.sec !== 'drop') seamOk = false;
