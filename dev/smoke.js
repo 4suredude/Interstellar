@@ -308,6 +308,35 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     console.log('OK  loot: rarity ladder drops, pickup, stat hooks, Zone-only');
   }
 
+  // capitals vs the world: bombs fuse on hulls, patrols never cross walls
+  {
+    const Wc = SIM.createWorld({ seed: 777, spawnPrizes: false, zoneWorld: true, authority: true });
+    const boss = Wc.capitals.find(c => c.kind === 'reaver');
+    const g = SIM.makeShip(Wc, 'titan', 'local', 'Gunner', null, 1);
+    SIM.spawnShip(Wc, g);
+    g.x = boss.x + boss.r + 300; g.y = boss.y; g.angle = Math.PI;
+    g.energy = g.maxEnergy; g.bombCd = 0;
+    SIM.applyLoadoutDefaults(g);
+    const hp0 = boss.hp;
+    SIM.fireBomb(Wc, g);
+    for (let i = 0; i < 240 && boss.hp === hp0; i++) SIM.updateWorld(Wc, SIM.STEP);
+    assert(boss.hp < hp0, 'a lobbed bomb fuses on a capital hull (' + Math.round(hp0 - boss.hp) + ' dmg)');
+    // swept-path clearance: sample every capital's course densely
+    let clips = null;
+    for (const c of Wc.capitals) {
+      const period = Math.PI * 2 / Math.abs(c.w1);
+      for (let k = 0; k < 512 && !clips; k++) {
+        SIM.capitalAt(Wc, c, k / 512 * period * 7.3);
+        const m = c.t.radius * 0.8;
+        for (let dx = -m; dx <= m && !clips; dx += 28)
+          for (let dy = -m; dy <= m && !clips; dy += 28)
+            if (SIM.tileSolid(Wc, ((c.x + dx) / SIM.TILE) | 0, ((c.y + dy) / SIM.TILE) | 0)) clips = c.kind;
+      }
+    }
+    assert(!clips, 'no capital patrol crosses built structure (' + clips + ')');
+    console.log('OK  capitals vs world: bombs crack hulls, patrols respect walls');
+  }
+
   // bomb identity: ricochet is a HULL TRAIT, and the fuse is generous
   {
     const Wb = SIM.createWorld({ seed: 21 });

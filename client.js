@@ -29,6 +29,7 @@
     zoneTeam: 0, credits: 0, relics: 0, upg: {}, mmo: false, upgOpen: false, quad: '', quadIdx: -1, evtSeen: -1,
     contracts: [], charted: [],
     hold: [], eqp: [], invOpen: false, invSel: 0, scoopMul: 1,
+    waypoint: null, trackIdx: 0, trackT: 0, trackTarget: null,
     ctlOpen: false, bindSel: 0, bindWait: false,
     mode: 'ffa', pendingMode: 'squad', match: null,
     banner: null, lastKillT: -99, combo: 0, duelW: 0, duelL: 0,
@@ -3383,6 +3384,26 @@
       ctx.globalCompositeOperation = 'source-over';
     }
 
+    // personal waypoint: a cyan pin you can warp back to
+    if (G.mmo && G.waypoint) {
+      const wp = G.waypoint;
+      if (wp.x > camL - 80 && wp.x < camR + 80 && wp.y > camT - 120 && wp.y < camB + 80) {
+        const pu = 0.7 + 0.3 * Math.sin(G.time * 2.6);
+        ctx.save();
+        ctx.translate(wp.x, wp.y);
+        ctx.globalCompositeOperation = 'lighter';
+        drawGlow(0, 0, 52 * pu, 190, 0.35);
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.strokeStyle = 'rgba(120,220,255,0.9)';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(0, 0, 13, 0, TAU); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, -26); ctx.lineTo(0, -13); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, -26); ctx.lineTo(8, -21); ctx.lineTo(0, -17); ctx.closePath();
+        ctx.fillStyle = 'rgba(120,220,255,0.9)'; ctx.fill();
+        ctx.restore();
+      }
+    }
+
     // module drops: the rarity ladder in the world — green, blue, purple,
     // and a legendary orange that throws a beacon you can see from a fight away
     if (W.drops) for (const d of W.drops) {
@@ -3689,6 +3710,7 @@
       drawContracts(narrow, bossShift);
       if (G.upgOpen) drawUpgradeBay();
       if (G.invOpen) drawInventory();
+      drawTracker();
     }
 
     {
@@ -4028,6 +4050,11 @@
       if (!on(p.x, p.y)) continue;
       ctx.fillStyle = 'rgba(90,255,130,0.8)';
       ctx.fillRect(rx + (p.x - wx) * k - 1, ry + (p.y - wy) * k - 1, 2, 2);
+    }
+    // the waypoint pings cyan
+    if (G.mmo && G.waypoint && on(G.waypoint.x, G.waypoint.y)) {
+      ctx.fillStyle = 'rgba(120,220,255,0.95)';
+      ctx.fillRect(rx + (G.waypoint.x - wx) * k - 1.5, ry + (G.waypoint.y - wy) * k - 1.5, 3, 3);
     }
     // module drops ping in their rarity color; a legendary blinks
     if (G.W.drops) for (const d of G.W.drops) {
@@ -4563,6 +4590,7 @@
       G.charted = Array.isArray(d.ch) ? d.ch : [];
       G.hold = Array.isArray(d.hd) ? d.hd : [];
       G.eqp = Array.isArray(d.eq) ? d.eq : [];
+      G.waypoint = d.wp && isFinite(d.wp.x) && isFinite(d.wp.y) ? { x: +d.wp.x, y: +d.wp.y } : null;
     } catch (e) { G.credits = 0; G.relics = 0; G.upg = {}; G.contracts = []; G.charted = []; G.hold = []; G.eqp = []; }
   }
   function saveMMO() {
@@ -4570,7 +4598,7 @@
       GLOBAL.localStorage.setItem('interstellar-mmo', JSON.stringify({
         c: G.credits, r: G.relics, u: G.upg, sq: G.zoneTeam,
         ct: G.contracts, ch: G.charted,
-        hd: G.hold, eq: G.eqp,
+        hd: G.hold, eq: G.eqp, wp: G.waypoint,
       }));
     } catch (e) { }
   }
@@ -4642,6 +4670,80 @@
     while (G.contracts.length < 3) G.contracts.push(rollContract(heldKinds(-1)));
   }
   const contractDef = k => CONTRACTS.find(c => c.k === k) || CONTRACTS[0];
+
+  // ------------------------------------------------------------ tracker
+  // The endless map's answer to "where IS everything": an edge-of-screen
+  // chevron pointing at the tracked contract's nearest live objective.
+  // V cycles which contract is tracked; resolution is cached at 2 Hz.
+  function trackResolve() {
+    const p = G.player, W = G.W;
+    if (!p || p.dead || !W || !G.contracts.length) return null;
+    const nearest = (list, ok, gx, gy) => {
+      let best = null, bd = 1e18;
+      for (const o of list) {
+        if (!ok(o)) continue;
+        const d = Math.hypot((gx ? gx(o) : o.x) - p.x, (gy ? gy(o) : o.y) - p.y);
+        if (d < bd) { bd = d; best = o; }
+      }
+      return best && { x: gx ? gx(best) : best.x, y: gy ? gy(best) : best.y, d: bd };
+    };
+    // try the tracked contract first, then the others, so the pointer never
+    // goes dark just because one objective has no live instance right now
+    for (let step = 0; step < G.contracts.length; step++) {
+      const ct = G.contracts[(G.trackIdx + step) % G.contracts.length];
+      if (!ct || ct.have >= ct.need) continue;
+      let t = null;
+      if (ct.k === 'hunt') t = nearest(W.ships, o => !o.dead && !o.docked && o !== p && (!p.team || o.team !== p.team));
+      else if (ct.k === 'raid') t = nearest(W.ships, o => !o.dead && o.marauder);
+      else if (ct.k === 'boss') t = nearest(W.capitals || [], o => o.boss && !o.dead);
+      else if (ct.k === 'cache') t = nearest(W.caches || [], o => o.taken < 0 || W.time - o.taken >= 90);
+      else if (ct.k === 'relic') t = nearest(W.relicSlots || [], o => o.taken < 0 || W.time - o.taken >= 240);
+      else if (ct.k === 'salvage') t = nearest(W.prizes, () => true);
+      else if (ct.k === 'survey' || ct.k === 'hold') {
+        const G2 = SIM.GRID, cand = [];
+        for (let q = 0; q < G2 * G2; q++) {
+          const qx = q % G2, qy = (q / G2) | 0;
+          let skip = false;
+          for (const tm in SIM.FACTIONS) { const F = SIM.FACTIONS[tm]; if (F.qx === qx && F.qy === qy) skip = true; }
+          if (W.deadZone && W.deadZone.qx === qx && W.deadZone.qy === qy) skip = ct.k === 'hold';
+          if (qx === (G2 >> 1) && qy === (G2 >> 1)) skip = skip || ct.k === 'hold';
+          if (skip) continue;
+          if (ct.k === 'survey' && G.charted.indexOf(q) >= 0) continue;
+          if (ct.k === 'hold' && SIM.terrOwner(W, (qx + 0.5) * SIM.QUADPX, (qy + 0.5) * SIM.QUADPX) === G.zoneTeam) continue;
+          cand.push({ x: (qx + 0.5) * SIM.QUADPX, y: (qy + 0.5) * SIM.QUADPX });
+        }
+        t = nearest(cand, () => true);
+      }
+      if (t) return { x: t.x, y: t.y, d: t.d, label: contractDef(ct.k).n.toUpperCase(), ct };
+    }
+    return null;
+  }
+  function drawTracker() {
+    if (!G.mmo || !G.player || G.player.dead) return;
+    G.trackT -= 1;
+    if (G.trackT <= 0) { G.trackTarget = trackResolve(); G.trackT = 30; }   // ~2 Hz at 60fps
+    const t = G.trackTarget;
+    if (!t) return;
+    const dx = t.x - G.player.x, dy = t.y - G.player.y;
+    const d = Math.hypot(dx, dy);
+    if (d < 1200) return;                      // it's on your scanner now
+    const ang = Math.atan2(dy, dx);
+    // park the chevron on the screen-edge ellipse toward the target
+    const rx = vw / 2 - 54, ry = vh / 2 - 64;
+    const cx = vw / 2 + Math.cos(ang) * rx, cy = vh / 2 + Math.sin(ang) * ry;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(ang);
+    const pu = 0.75 + 0.25 * Math.sin(G.time * 4);
+    ctx.fillStyle = 'rgba(255,205,110,' + (0.75 * pu).toFixed(3) + ')';
+    ctx.beginPath();
+    ctx.moveTo(16, 0); ctx.lineTo(-7, 9); ctx.lineTo(-2, 0); ctx.lineTo(-7, -9);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+    const km = (d / 1000).toFixed(d > 20000 ? 0 : 1);
+    txt(t.label + ' · ' + km + 'km', cx - Math.cos(ang) * 34, cy - Math.sin(ang) * 34 + 4, 10, 'rgba(255,205,110,0.85)', 'center', 700);
+  }
+
   function contractProgress(kind, n) {
     if (!G.mmo || !G.contracts) return;
     let changed = false;
@@ -4874,7 +4976,7 @@
     ['strafeL', 'Strafe left'], ['strafeR', 'Strafe right'],
     ['gun', 'Guns'], ['bomb', 'Bomb'],
     ['repel', 'Repel'], ['burst', 'Burst'], ['special', 'Rocket / Blink'],
-    ['warp', 'Warp to Comet'], ['dock', 'Dock / launch'],
+    ['warp', 'Warp home / to Comet'], ['wayp', 'Waypoint set · warp'], ['track', 'Cycle tracked contract'], ['dock', 'Dock / launch'],
     ['bay', 'Upgrade bay'], ['board', 'Contract board'], ['items', 'Module hold'], ['scores', 'Standings (hold)'],
   ];
   const DEFAULT_BINDS = {
@@ -4885,6 +4987,7 @@
     // Shift is THE bomb key; B is the alternate. Tab is no longer a weapon.
     bomb: ['ShiftLeft', 'ShiftRight', 'KeyB'],
     repel: ['KeyE'], burst: ['KeyQ'], special: ['KeyR'], warp: ['KeyT'],
+    wayp: ['KeyY'], track: ['KeyV'],
     dock: ['KeyG'], bay: ['KeyU'], board: ['KeyJ'], items: ['KeyI'], scores: ['Tab'],
   };
   let BINDS = {};
@@ -5186,7 +5289,31 @@
       if (isAct(code, 'repel')) SIM.doRepel(G.W, p);
       else if (isAct(code, 'burst')) SIM.doBurst(G.W, p);
       else if (isAct(code, 'special')) { if (p.t.blink) SIM.doBlink(G.W, p); else SIM.fireRocket(G.W, p); }
-      else if (isAct(code, 'warp')) SIM.warpToBeacon(G.W, p);
+      else if (isAct(code, 'warp')) {
+        if (G.mmo) {
+          if (SIM.warpHome(G.W, p)) say(p.team ? 'Warped home — the carrier has you.' : 'Warped to the contested core.', '#8df');
+          else say(p.warpCd > 0 ? 'Warp drive cycling (' + Math.ceil(p.warpCd) + 's).' : p.energy <= 450 ? 'Warp needs 450 energy.' : 'Already home.', '#f88');
+        } else SIM.warpToBeacon(G.W, p);
+      }
+      else if (isAct(code, 'wayp') && G.mmo) {
+        if (e.shiftKey || !G.waypoint) {
+          G.waypoint = { x: Math.round(p.x), y: Math.round(p.y) };
+          saveMMO();
+          say('Waypoint set — ' + bindLabel('wayp') + ' warps back here.', '#8df');
+        } else if (Math.hypot(p.x - G.waypoint.x, p.y - G.waypoint.y) < 900) {
+          say('Already at the waypoint — Shift+' + bindLabel('wayp') + ' moves it here.', '#89a');
+        } else if (SIM.warpTo(G.W, p, G.waypoint.x, G.waypoint.y)) {
+          say('Warped to waypoint.', '#8df');
+        } else {
+          say(p.warpCd > 0 ? 'Warp drive cycling (' + Math.ceil(p.warpCd) + 's).' : 'Warp needs 450 energy.', '#f88');
+        }
+      }
+      else if (isAct(code, 'track') && G.mmo && G.contracts.length) {
+        G.trackIdx = (G.trackIdx + 1) % G.contracts.length;
+        G.trackT = 0;   // re-resolve immediately
+        const ct = G.contracts[G.trackIdx];
+        say('Tracking: ' + contractDef(ct.k).n + ' (' + ct.have + '/' + ct.need + ')', '#fd8');
+      }
     }
   }
   function onKeyUp(e) {

@@ -77,7 +77,8 @@ They fly their own patrols, fire batteries of turrets at anything in range
 break up. Get within engagement range and a tiered hull bar takes the top of
 your screen. Bullets chip them; **bombs are how you actually crack one**.
 They respawn at their lair on a timer, so a lair is a place you can farm —
-if you can take it.
+if you can take it. Carry a **Leviathan Hunt** contract and the course
+pointer aims straight at the nearest living boss.
 
 **Contracts.** You always carry three, and they complete from what you'd be
 doing anyway — Hunt, Bounty (marauder heads), Salvage, Scavenge (derelict
@@ -85,6 +86,14 @@ caches), Recovery (relics), Survey (chart new quadrants), and Conquest (help
 take ground). Each pays credits and is replaced the moment it's done, so the
 deep frontier always has a reason to be out there. `J` opens the board;
 progress persists with your pilot.
+
+**Finding the fight.** Every contract drives a **course pointer**: a gold
+chevron at the screen edge aiming at the nearest live objective — the boss
+lair, a marauder, an uncracked cache, an uncharted quadrant — with its
+distance. `V` cycles which contract it tracks. For the return leg, `T`
+**warps you home** to your mothership (freelancers ride to the contested
+core) and `Y` drops a **waypoint beacon** you can warp back to — both cost
+450 energy on a shared 25-second cooldown, so they're travel, not escape.
 
 **A frontier that's inhabited.** Two hundred **derelict caches** drift across
 the map — quick amber salvage worth credits, respawning, visible on the
@@ -366,7 +375,9 @@ A new generation of hulls joins the fleet — each with a mechanic all its own:
 | `E` | Repel |
 | `Q` | Burst |
 | `R` | Rocket (Blink on the Phantom) |
-| `T` | Warp to your team's Comet |
+| `T` | Warp home — your mothership (freelance: the core). In matches: warp to your team's Comet |
+| `Y` | Drop a waypoint beacon / warp back to it · `Shift+Y` moves it |
+| `V` | Cycle which contract the course pointer tracks |
 | `Tab` (hold) | Standings — live top 14 with kills and deaths |
 | `Enter` | Chat (online) — `/duel` `/accept` `/stats` `/votemap` `/help`, `//` for team |
 | `P` / `Esc` | Pause / menu |

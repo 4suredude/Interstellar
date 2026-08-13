@@ -905,6 +905,56 @@
       r1: span * (0.45 + rng() * 0.5), w1: (0.012 + rng() * 0.016) * (rng() < 0.5 ? -1 : 1), p1: rng() * TAU,
       r2: span * (0.14 + rng() * 0.18), w2: (0.05 + rng() * 0.06) * (rng() < 0.5 ? -1 : 1), p2: rng() * TAU,
     };
+    // A hull this size gliding through a fortress wall reads as a bug, not a
+    // patrol. Time-sampling the path can step clean over a thin wall (these
+    // hulls cover hundreds of px between samples), but the two epicycle
+    // frequencies are independent randoms, so over time the course precesses
+    // through the ENTIRE annulus r1±r2 around the berth. Testing the annulus
+    // itself is therefore airtight: while any solid tile sits inside it,
+    // shrink the orbit — a carrier that can't range its walled keep simply
+    // holds station inside it. Pure functions of the seed throughout, so
+    // every peer still agrees without netcode.
+    {
+      const margin = t.radius + 24;
+      // any solid tile inside the swept annulus (or an orbit reaching the
+      // world-edge clamp, which deforms the path off that annulus)?
+      const dirty = () => {
+        const Ro = c.r1 + c.r2 + margin;
+        const Ri = Math.max(0, c.r1 - c.r2 - margin);
+        if (c.homeX - Ro < 520 || c.homeY - Ro < 520 ||
+            c.homeX + Ro > WORLD - 520 || c.homeY + Ro > WORLD - 520) return true;
+        const tx0 = Math.max(0, ((c.homeX - Ro) / TILE) | 0), tx1 = Math.min(MAPS - 1, ((c.homeX + Ro) / TILE) | 0);
+        const ty0 = Math.max(0, ((c.homeY - Ro) / TILE) | 0), ty1 = Math.min(MAPS - 1, ((c.homeY + Ro) / TILE) | 0);
+        for (let ty = ty0; ty <= ty1; ty++) {
+          const py = ty * TILE + TILE / 2;
+          for (let tx = tx0; tx <= tx1; tx++) {
+            if (!tileSolid(W, tx, ty)) continue;
+            const d = hyp(tx * TILE + TILE / 2 - c.homeX, py - c.homeY);
+            if (d >= Ri && d <= Ro) return true;
+          }
+        }
+        return false;
+      };
+      // Shrinking can't fix a bad BERTH — findClearNear picks fighter-sized
+      // clearings, and a dreadnought's hull can still overlap the wall next
+      // door. Bosses may re-berth nearby (still seed-deterministic); a squad
+      // carrier never leaves its fortress keep, it only tightens its orbit.
+      const oR1 = c.r1, oR2 = c.r2, oX = c.homeX, oY = c.homeY;
+      let placed = false;
+      for (let attempt = 0; attempt < 20 && !placed; attempt++) {
+        if (attempt > 0) {
+          if (team) break;                       // carriers: shrink-only
+          const a = rng() * TAU, rr = 500 + attempt * 400 * rng();
+          c.homeX = clamp(oX + Math.cos(a) * rr, 2600, WORLD - 2600);
+          c.homeY = clamp(oY + Math.sin(a) * rr, 2600, WORLD - 2600);
+          c.r1 = oR1; c.r2 = oR2;
+        }
+        for (let tries = 0; tries < 10; tries++) {
+          if (!dirty()) { placed = true; break; }
+          c.r1 *= 0.55; c.r2 *= 0.55;
+        }
+      }
+    }
     capitalAt(W, c, 0);
     W.capitals.push(c);
     return c;
@@ -936,9 +986,10 @@
     const rng = W.rng;
     const lair = (kind, x, y) => {
       const p = findClearNear(W, x, y, rng) || { x, y };
-      const c = makeCapital(W, kind, 0, p.x, p.y);
-      c.homeX = p.x; c.homeY = p.y;
-      return c;
+      // makeCapital owns the berth: it may relocate a boss whose clearing is
+      // fighter-sized but not capital-sized. (An assignment here used to
+      // clobber that relocation right back onto the wall it escaped.)
+      return makeCapital(W, kind, 0, p.x, p.y);
     };
     if (W.deadZone) lair('dreadnought', (W.deadZone.qx + 0.5) * QUADPX, (W.deadZone.qy + 0.5) * QUADPX);
     if (W.danger) lair('leviathan', W.danger.x, W.danger.y);
@@ -1396,6 +1447,39 @@
     return true;
   }
 
+  // Zone travel: 115 km is the POINT of the map, but repositioning across it
+  // should be a choice, not a chore. Both warps burn real energy and share
+  // the warp cooldown, so they're travel tools rather than combat escapes.
+  function warpHome(W, s) {
+    if (s.dead || s.warpCd > 0 || s.energy <= 450) return false;
+    const ms = s.team && W.motherships ? W.motherships[s.team] : null;
+    // freelancers ride the lanes home to the contested core instead
+    const tx = ms && !ms.dead ? ms.x : WORLD / 2;
+    const ty = ms && !ms.dead ? ms.y : WORLD / 2;
+    if (hyp(s.x - tx, s.y - ty) < 1200) return false;   // already home
+    const p = findClearNear(W, tx + rand(-260, 260), ty + rand(-260, 260));
+    if (!p) return false;
+    s.energy -= 450; s.warpCd = 25; s.safe = Math.max(s.safe, 1.5);
+    const x0 = s.x, y0 = s.y;
+    s.x = p.x; s.y = p.y; s.vx = 0; s.vy = 0;
+    ev(W, { e: 'warp', id: s.id, x0, y0, x1: s.x, y1: s.y, hue: s.hue });
+    return true;
+  }
+  function warpTo(W, s, x, y) {
+    if (s.dead || s.warpCd > 0 || s.energy <= 450) return false;
+    if (!fin(x) || !fin(y)) return false;
+    x = clamp(x, TILE * 4, WORLD - TILE * 4);
+    y = clamp(y, TILE * 4, WORLD - TILE * 4);
+    if (hyp(s.x - x, s.y - y) < 900) return false;      // walk that far
+    const p = findClearNear(W, x, y);
+    if (!p) return false;
+    s.energy -= 450; s.warpCd = 25; s.safe = Math.max(s.safe, 1.5);
+    const x0 = s.x, y0 = s.y;
+    s.x = p.x; s.y = p.y; s.vx = 0; s.vy = 0;
+    ev(W, { e: 'warp', id: s.id, x0, y0, x1: s.x, y1: s.y, hue: s.hue });
+    return true;
+  }
+
   function doBlink(W, s) {
     if (!s.t.blink || s.blinkCd > 0 || s.dead) return false;
     if (s.energy <= 350) return false;
@@ -1838,6 +1922,17 @@
           if (s.team && b.owner && s.team === b.owner.team) continue;
           if (hyp(s.x - b.x, s.y - b.y) < s.t.radius + (b.prox || 15)) { boom = true; break; }
         }
+        // Capital hulls fuse bombs too. Bullets always checked capitals but
+        // bombs never did — the anti-capital weapon sailed clean through the
+        // hull it exists to crack unless a wall or fighter happened to be
+        // behind it. Same allegiance rules as the bullet path.
+        if (!boom && W.capitals) {
+          for (const c of W.capitals) {
+            if (c.dead) continue;
+            if (!c.boss && c.team && b.owner && b.owner.team === c.team) continue;
+            if (hyp(c.x - b.x, c.y - b.y) < c.r + (b.prox || 15)) { boom = true; break; }
+          }
+        }
       }
       if (boom) {
         W.bombs.splice(i, 1);
@@ -2054,7 +2149,7 @@
     tileSolid, solidAtPx, rectSolid, losClear, randClearPoint, findSpawn, findClearNear, rockAt,
     quadOf, terrOwner, evActive, showerRockAt, EV_LEAD, spawnMarauder, seedDeadZone,
     CAPITALS, BOSS_KINDS, makeCapital, damageCapital, dockShip, undockShip,
-    RARITIES, MODULES, DROP_TABLES, rollDrop, dropAt,
+    RARITIES, MODULES, DROP_TABLES, rollDrop, dropAt, capitalAt, warpHome, warpTo,
     createWorld, makeShip, removeShip, spawnShip, addBots,
     applyLoadoutDefaults, applyPrize, addPrize, removePrizeById,
     fireGun, fireBomb, doRepel, doBurst, fireRocket, doBlink, warpToBeacon,
