@@ -220,8 +220,14 @@ as humans join and rejoin as the zone empties.
 
 Open `index.html` in any modern browser, pick a mode and a ship, and fly.
 ![Phone layout](assets/mobile.png)
+![Landscape layout](assets/landscape.png)
 
-Works on **phones and tablets** too: a virtual stick appears under your left
+Works on **phones and tablets** too — **portrait or landscape**: the HUD
+detects a short viewport (a phone on its side is as wide as a desktop and
+as short as nothing else) and switches to the compact layout — scanner
+clear of the weapon cluster, standings folded away, and the upgrade bay
+and module hold compressing their rows to fit, dimming the fight behind
+them while open. A virtual stick appears under your left
 thumb (point it where you want to fly), weapon buttons sit under your right,
 and every menu is tappable — the hosted zone is fully playable from mobile.
 

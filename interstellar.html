@@ -5908,7 +5908,11 @@
     // the first touch — chip row clipped off both edges, standings sitting on
     // top of the energy bar — and a small desktop window never recovered at
     // all. Width decides the layout; touch only decides the controls.
-    const narrow = vw < 640;
+    // Phone layout is about SPACE in either axis: a landscape phone is
+    // ~870x400 — wide as a desktop, short as nothing else. Width-only
+    // detection handed it the desktop HUD, whose bottom-right radar and
+    // standings panel land exactly where the touch buttons live.
+    const narrow = vw < 640 || vh < 540;
     drawContacts();
 
     // BOSS ENGAGEMENT: the nearest hostile capital in range takes over the
@@ -5930,8 +5934,6 @@
     if (G.mmo) {
       txt('¢ ' + G.credits + '  ·  ◆ ' + G.relics + '  ·  U bay · J board · I hold', 20, (narrow ? 104 : 126) + bossShift, narrow ? 10 : 12, '#fd8', 'left', 700);
       drawContracts(narrow, bossShift);
-      if (G.upgOpen) drawUpgradeBay();
-      if (G.invOpen) drawInventory();
       drawTracker();
     }
 
@@ -6097,8 +6099,10 @@
     }
 
     if (narrow) {
-      const R = Math.min(150, vw * 0.28);
-      drawRadar(vw - R - 12, 124, R);
+      // height cap keeps the scanner clear of the weapon cluster when the
+      // phone lies sideways
+      const R = Math.min(150, vw * 0.28, vh * 0.3);
+      drawRadar(vw - R - 12, vh < 540 ? 96 : 124, R);
     } else {
       const R = 172;
       drawRadar(vw - R - 12, vh - R - 12, R);
@@ -6126,6 +6130,11 @@
       ctx.fillRect(0, 0, vw, vh);
       ctx.globalAlpha = 1;
     }
+    // modal panels render LAST: on a landscape phone they span the whole
+    // height, and every HUD element painted after them was stamping right
+    // across the price list
+    if (G.mmo && G.upgOpen) drawUpgradeBay();
+    if (G.mmo && G.invOpen) drawInventory();
     if (held('scores') && !G.ctlOpen) drawScoreboard();
   }
 
@@ -6454,10 +6463,14 @@
     saveMMO();
   }
   function drawInventory() {
+    if (vh < 540) { ctx.fillStyle = 'rgba(3,5,12,0.55)'; ctx.fillRect(0, 0, vw, vh); }
     const w = Math.min(430, vw - 16), x = vw / 2 - w / 2;
     const rows = Math.max(1, G.eqp.length + G.hold.length);
-    const h = 96 + rows * 30;
-    const y0 = Math.max(70, Math.min(vh - h - 10, vh / 2 - h / 2));
+    // a landscape phone gives ~400px of height for up to 11 rows: the rows
+    // compress to fit rather than running off the bottom of the screen
+    const rh = Math.max(19, Math.min(30, ((vh - 110) / rows) | 0));
+    const h = 96 + rows * rh;
+    const y0 = Math.max(6, Math.min(vh - h - 8, vh / 2 - h / 2));
     panel(x, y0, w, h);
     txt('MODULE HOLD', x + 14, y0 + 24, 15, '#c8ecff', 'left', 800);
     txt('¢ ' + G.credits, x + w - 14, y0 + 24, 15, '#fd8', 'right', 800);
@@ -6469,20 +6482,21 @@
       const selNow = G.invSel === selIdx;
       if (selNow) {
         ctx.fillStyle = 'rgba(90,140,220,0.16)';
-        ctx.fillRect(x + 6, y - 3, w - 12, 28);
+        ctx.fillRect(x + 6, y - 3, w - 12, rh - 2);
       }
       const R = SIM.RARITIES[it.r];
       ctx.fillStyle = modColor(it, 62, 0.95);
       ctx.save();
-      ctx.translate(x + 22, y + 10);
+      ctx.translate(x + 22, y + rh * 0.33);
       ctx.rotate(Math.PI / 4);
       ctx.fillRect(-4, -4, 8, 8);
       ctx.restore();
-      txt(modLine(it), x + 38, y + 10, 12.5, selNow ? '#eef6ff' : '#cde', 'left', selNow ? 800 : 600);
-      txt(eq ? 'FITTED' : R.label, x + w - 64, y + 10, 10, eq ? '#8f8' : modColor(it, 68), 'right', 700);
-      txt('¢' + Math.round(R.scrap * it.p), x + w - 14, y + 10, 10, '#987', 'right');
-      T.ui.inv.push({ x: x + 6, y: y - 3, w: w - 12, h: 28, i: selIdx });
-      y += 30;
+      const ty = y + rh * 0.36, fs = rh < 24 ? 10.5 : 12.5;
+      txt(modLine(it), x + 38, ty, fs, selNow ? '#eef6ff' : '#cde', 'left', selNow ? 800 : 600);
+      txt(eq ? 'FITTED' : R.label, x + w - 64, ty, rh < 24 ? 8.5 : 10, eq ? '#8f8' : modColor(it, 68), 'right', 700);
+      txt('¢' + Math.round(R.scrap * it.p), x + w - 14, ty, rh < 24 ? 8.5 : 10, '#987', 'right');
+      T.ui.inv.push({ x: x + 6, y: y - 3, w: w - 12, h: rh - 2, i: selIdx });
+      y += rh;
     };
     G.eqp.forEach((it, i) => row(it, true, i));
     if (G.eqp.length && G.hold.length) {
@@ -6497,10 +6511,13 @@
   }
 
   function drawUpgradeBay() {
+    if (vh < 540) { ctx.fillStyle = 'rgba(3,5,12,0.55)'; ctx.fillRect(0, 0, vw, vh); }
     const rows = UPGRADES.length;
     const w = Math.min(392, vw - 16), x = vw - w - 8;
-    const h = 56 + rows * 34;
-    const y0 = Math.max(90, Math.min(vh - h - 10, vh / 2 - h / 2));
+    // ten tracks must fit a 400px-tall landscape phone: compress the rows
+    const rh = Math.max(20, Math.min(34, ((vh - 70) / rows) | 0));
+    const h = 56 + rows * rh;
+    const y0 = Math.max(6, Math.min(vh - h - 8, vh / 2 - h / 2));
     panel(x, y0, w, h);
     txt('UPGRADE BAY', x + 14, y0 + 22, 15, '#c8ecff', 'left', 800);
     txt('¢ ' + G.credits + '  ◆ ' + G.relics, x + w - 14, y0 + 22, 15, '#fd8', 'right', 800);
@@ -6511,16 +6528,18 @@
       const cost = maxed ? 0 : U.cost(lvl + 1);
       const need = maxed || !U.rel ? 0 : U.rel(lvl + 1);
       const can = !maxed && G.credits >= cost && G.relics >= need;
-      const y = y0 + 52 + i * 34;
-      txt(String((i + 1) % 10), x + 14, y + 13, 11, '#678', 'left', 700);
-      txt(U.n, x + 32, y + 13, 13, maxed ? '#8f8' : can ? '#cfe' : '#88a', 'left', 700);
+      const y = y0 + 52 + i * rh;
+      const short = rh < 28;
+      txt(String((i + 1) % 10), x + 14, y + 13, short ? 10 : 11, '#678', 'left', 700);
+      txt(U.n, x + 32, y + 13, short ? 11.5 : 13, maxed ? '#8f8' : can ? '#cfe' : '#88a', 'left', 700);
       for (let pI = 0; pI < U.max; pI++) {
         ctx.fillStyle = pI < lvl ? 'hsla(150,80%,55%,0.95)' : 'rgba(255,255,255,0.12)';
         ctx.fillRect(x + 160 + pI * 12, y + 4, 8, 8);
       }
-      txt(maxed ? 'MAX' : '¢' + cost + (need ? ' ◆' + need : ''), x + w - 14, y + 13, 12, maxed ? '#8f8' : can ? '#fd8' : '#a66', 'right', 700);
-      txt(U.d, x + 32, y + 27, 9, '#678', 'left');
-      T.ui.upg.push({ x, y: y - 3, w, h: 34, i });
+      txt(maxed ? 'MAX' : '¢' + cost + (need ? ' ◆' + need : ''), x + w - 14, y + 13, short ? 10.5 : 12, maxed ? '#8f8' : can ? '#fd8' : '#a66', 'right', 700);
+      // the per-track description yields when there's no headroom for it
+      if (!short) txt(U.d, x + 32, y + 27, 9, '#678', 'left');
+      T.ui.upg.push({ x, y: y - 3, w, h: rh, i });
     }
   }
 

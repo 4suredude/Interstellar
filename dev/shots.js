@@ -28,6 +28,7 @@ const only = argv.filter((a, i) => !a.startsWith('--') && i !== outIdx + 1);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const DESKTOP = { width: 1440, height: 810 };
 const PHONE = { width: 402, height: 874 };
+const PHONE_LAND = { width: 874, height: 402 };
 
 // Each scene runs in the page with `A` = the client's test hook. `run` is the
 // number of seconds of live simulation to let elapse before the grab, so
@@ -145,6 +146,22 @@ const SHOTS = [
       A.G.pendingMode = 'ffa';
       A.startSolo('corsair');
       A.G.paused = true; A.G.ctlOpen = true; A.G.bindSel = 7;
+    `,
+  },
+  {
+    name: 'landscape', view: PHONE_LAND, run: 2.4, touch: true, tap: true,
+    pre: `A.G.player.dead = false; A.G.player.energy = A.G.player.maxEnergy;
+          A.G.banner = null; A.G.deathBy = '';`,
+    setup: `
+      A.G.pendingMode = 'ffa';
+      const me = A.startSolo('hornet');
+      for (let i = 0; i < 3; i++) {
+        const b = A.SIM.makeShip(A.G.W, A.SIM.pick(A.SIM.SHIP_ORDER), 'bot',
+                                 A.SIM.pick(A.SIM.BOT_NAMES), null, 2);
+        A.SIM.spawnShip(A.G.W, b);
+        b.x = me.x + Math.cos(i * 2.1) * 280; b.y = me.y + Math.sin(i * 2.1) * 280;
+        b.ai.skill = 0.45;
+      }
     `,
   },
   {
