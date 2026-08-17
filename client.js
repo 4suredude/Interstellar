@@ -70,7 +70,13 @@
   };
   // Touch buttons scale with the screen but FLOOR at a real finger size —
   // shrinking targets on a phone is exactly backwards
-  function touchScale() { return Math.max(0.6, Math.min(1, Math.min(vw, vh) / 640)); }
+  function touchScale() {
+    // Controls size off the SHORT axis so they always fit — but in landscape
+    // the short axis is the only constraint and 640 is over-cautious: it gave
+    // a 27px fire button on a phone with 200px of unused width beside it.
+    const wide = vw > vh * 1.5;
+    return Math.max(0.6, Math.min(1, Math.min(vw, vh) / (wide ? 520 : 640)));
+  }
   function layoutTouchButtons() {
     const p = G.player;
     const sc = touchScale();
@@ -90,9 +96,17 @@
       },
       { key: 'pause', label: 'II', x: vw - 28, y: 64, r: 16 },
     ];
-    if (fsAvailable()) T.btns.push({ key: 'fs', label: '⛶', x: vw - 28, y: 108, r: 16 });
-    if (G.online) T.btns.push({ key: 'chat', label: 'CHAT', x: 30, y: vh * 0.4, r: 24 * sc });
-    if (G.mmo) T.btns.push({ key: 'upg', label: '¢' + Math.min(999, G.credits), x: 30, y: vh * 0.55, r: 23 * sc });
+    // landscape puts the scanner high on the right, where the stacked
+    // fullscreen button used to land on its corner — sit them side by side
+    const wideTop = vw > vh * 1.5;
+    if (fsAvailable()) T.btns.push({
+      key: 'fs', label: '⛶',
+      x: wideTop ? vw - 68 : vw - 28, y: wideTop ? 64 : 108, r: 16,
+    });
+    // landscape stacks the side buttons low-left, clear of the course pointer
+    const wideV = vw > vh * 1.5;
+    if (G.online) T.btns.push({ key: 'chat', label: 'CHAT', x: 30, y: vh * (wideV ? 0.62 : 0.4), r: 24 * sc });
+    if (G.mmo) T.btns.push({ key: 'upg', label: '¢' + Math.min(999, G.credits), x: 30, y: vh * (wideV ? 0.82 : 0.55), r: 23 * sc });
     if (G.player && !G.player.t.blink && G.player.team &&
         G.W.ships.some(s => s !== G.player && !s.dead && s.team === G.player.team && s.type === 'comet')) {
       T.btns.push({ key: 'warp', label: 'WARP', x: vw - 258 * sc, y: bb - 170 * sc, r: 25 * sc });
@@ -3669,16 +3683,19 @@
   function drawHUD() {
     const p = G.player;
     if (!p) return;
-    // Phone layout is about SPACE, not about whether a finger has landed yet.
-    // Keying it on T.active meant a phone rendered the full desktop HUD until
-    // the first touch — chip row clipped off both edges, standings sitting on
-    // top of the energy bar — and a small desktop window never recovered at
-    // all. Width decides the layout; touch only decides the controls.
-    // Phone layout is about SPACE in either axis: a landscape phone is
-    // ~870x400 — wide as a desktop, short as nothing else. Width-only
-    // detection handed it the desktop HUD, whose bottom-right radar and
-    // standings panel land exactly where the touch buttons live.
+    // Phone layout is about SPACE in either axis, not about whether a finger
+    // has landed. Keying it on T.active left a phone with the desktop HUD
+    // until first touch; keying it on width alone left a LANDSCAPE phone
+    // with it forever — 870px wide reads as a desktop, and the desktop
+    // radar and standings then land on the touch buttons.
     const narrow = vw < 640 || vh < 540;
+    // A phone on its side puts your ship at the centre of a 400px-tall view,
+    // so the combat ring (the annulus you actually watch for incoming) runs
+    // right through the top edge. Anything wide and centred up there is a
+    // wall across three compass directions — measured at 72% blind to the
+    // NE and NW. In this mode the status bars become hairlines flush to the
+    // top edge and the text columns hug the sides, outside the ring.
+    const shortV = vh < 540;
     drawContacts();
 
     // BOSS ENGAGEMENT: the nearest hostile capital in range takes over the
@@ -3694,29 +3711,43 @@
         if (d < bd) { bd = d; boss = c; }
       }
     }
-    const bossShift = narrow && boss ? 36 : 0;
+    const bossShift = narrow && !shortV && boss ? 36 : 0;
 
     // MMO layer: credits + the upgrade bay
     if (G.mmo) {
-      txt('¢ ' + G.credits + '  ·  ◆ ' + G.relics + '  ·  U bay · J board · I hold', 20, (narrow ? 104 : 126) + bossShift, narrow ? 10 : 12, '#fd8', 'left', 700);
-      drawContracts(narrow, bossShift);
+      txt(shortV ? '¢ ' + G.credits + ' · ◆ ' + G.relics
+                 : '¢ ' + G.credits + '  ·  ◆ ' + G.relics + '  ·  U bay · J board · I hold',
+        shortV ? 8 : 20, shortV ? (boss ? 59 : 48) : (narrow ? 104 : 126) + bossShift,
+        shortV ? 9.5 : narrow ? 10 : 12, '#fd8', 'left', 700);
+      drawContracts(narrow, bossShift, shortV, boss);
       drawTracker();
     }
 
     {
       if (boss) {
-        const bw = Math.min(560, vw - 60), bx = vw / 2 - bw / 2, by = narrow ? 92 : 44;
         const frac = clamp(boss.hp / boss.maxHp, 0, 1);
-        panel(bx - 6, by - 6, bw + 12, 30);
-        ctx.fillStyle = 'rgba(255,255,255,0.07)';
-        ctx.fillRect(bx, by + 10, bw, 10);
-        ctx.fillStyle = 'hsla(' + (8 + 34 * frac) + ',90%,55%,0.95)';
-        ctx.fillRect(bx, by + 10, bw * frac, 10);
-        // tier pips so you know what you picked a fight with
         let pips = '';
         for (let i = 0; i < (boss.t.tier || 1); i++) pips += '◆';
-        txt(pips + ' ' + boss.t.label.toUpperCase(), bx, by + 6, 12, '#fca', 'left', 800);
-        txt(Math.ceil(boss.hp).toLocaleString() + ' / ' + boss.maxHp.toLocaleString(), bx + bw, by + 6, 11, '#c99', 'right', 700);
+        if (shortV) {
+          // second hairline, hugging the first — the boss fight still reads
+          // at a glance without walling off the sky
+          const bw2 = vw - 16, bx2 = 8, by2 = 11;
+          ctx.fillStyle = 'rgba(255,255,255,0.08)';
+          ctx.fillRect(bx2, by2, bw2, 5);
+          ctx.fillStyle = 'hsla(' + (8 + 34 * frac) + ',90%,55%,0.95)';
+          ctx.fillRect(bx2, by2, bw2 * frac, 5);
+          txt(pips + ' ' + boss.t.label.toUpperCase() + '  ' + Math.ceil(boss.hp).toLocaleString(),
+            8, 48, 9.5, 'rgba(255,190,170,0.85)', 'left', 700);
+        } else {
+          const bw = Math.min(560, vw - 60), bx = vw / 2 - bw / 2, by = narrow ? 92 : 44;
+          panel(bx - 6, by - 6, bw + 12, 30);
+          ctx.fillStyle = 'rgba(255,255,255,0.07)';
+          ctx.fillRect(bx, by + 10, bw, 10);
+          ctx.fillStyle = 'hsla(' + (8 + 34 * frac) + ',90%,55%,0.95)';
+          ctx.fillRect(bx, by + 10, bw * frac, 10);
+          txt(pips + ' ' + boss.t.label.toUpperCase(), bx, by + 6, 12, '#fca', 'left', 800);
+          txt(Math.ceil(boss.hp).toLocaleString() + ' / ' + boss.maxHp.toLocaleString(), bx + bw, by + 6, 11, '#c99', 'right', 700);
+        }
       }
     }
 
@@ -3742,11 +3773,13 @@
     }
 
     // energy bar with segment ticks + glow cap
-    const bw = Math.min(380, vw - 40), bx = vw / 2 - bw / 2, by = narrow ? 60 : 16;
+    const ebh = shortV ? 6 : 17;                       // hairline when short
+    const bw = shortV ? vw - 16 : Math.min(380, vw - 40);
+    const bx = vw / 2 - bw / 2, by = shortV ? 3 : narrow ? 60 : 16;
     const frac = clamp(p.energy / p.maxEnergy, 0, 1);
-    panel(bx - 5, by - 5, bw + 10, 27);
+    if (!shortV) panel(bx - 5, by - 5, bw + 10, 27);
     ctx.fillStyle = 'rgba(255,255,255,0.05)';
-    ctx.fillRect(bx, by, bw, 17);
+    ctx.fillRect(bx, by, bw, ebh);
     const bg = ctx.createLinearGradient(bx, 0, bx + bw, 0);
     if (frac > 0.5) { bg.addColorStop(0, 'rgba(60,190,255,0.95)'); bg.addColorStop(1, 'rgba(120,255,230,0.95)'); }
     else if (frac > 0.25) { bg.addColorStop(0, 'rgba(255,180,60,0.95)'); bg.addColorStop(1, 'rgba(255,230,110,0.95)'); }
@@ -3756,15 +3789,16 @@
       bg.addColorStop(1, 'rgba(255,130,90,' + fl.toFixed(3) + ')');
     }
     ctx.fillStyle = bg;
-    ctx.fillRect(bx, by, bw * frac, 17);
+    ctx.fillRect(bx, by, bw * frac, ebh);
     ctx.fillStyle = 'rgba(4,8,18,0.55)';
-    for (let i = 1; i < 10; i++) ctx.fillRect(bx + bw * i / 10 - 0.5, by, 1, 17);
+    for (let i = 1; i < 10; i++) ctx.fillRect(bx + bw * i / 10 - 0.5, by, 1, ebh);
     if (frac > 0.02) {
       ctx.globalCompositeOperation = 'lighter';
-      drawGlow(bx + bw * frac, by + 8, 26, frac > 0.5 ? 190 : frac > 0.25 ? 45 : 5, 0.7);
+      drawGlow(bx + bw * frac, by + ebh / 2, shortV ? 14 : 26, frac > 0.5 ? 190 : frac > 0.25 ? 45 : 5, 0.7);
       ctx.globalCompositeOperation = 'source-over';
     }
-    txt(String(Math.max(0, p.energy | 0)), vw / 2, by + 13, 12, '#eaffff', 'center', 700);
+    // the readout moves into the left column when the bar is a hairline
+    if (!shortV) txt(String(Math.max(0, p.energy | 0)), vw / 2, by + 13, 12, '#eaffff', 'center', 700);
 
     // match score bar (duel / squad / core / online teams)
     if (G.duel) {
@@ -3800,10 +3834,21 @@
       ctx.globalAlpha = a;
       ctx.save();
       ctx.shadowColor = 'rgba(255,200,90,0.8)';
-      ctx.shadowBlur = 26;
-      txt(b.main, vw / 2, vh * 0.3, Math.min(44, vw * 1.5 / Math.max(8, b.main.length)), '#ffe9b8', 'center', 800);
+      // Landscape: 44px type with a 26px glow, parked at 30% of a 402px
+      // screen, was a WALL straight across the combat ring — measured as the
+      // single biggest blocker, worse than every panel combined. Announcements
+      // belong on the top edge on a short screen, not across the sky.
+      ctx.shadowBlur = shortV ? 7 : 26;
+      // short screens get ONE compact line hugging the top edge: two lines of
+      // display type at 30% height is a wall across the sky
+      const line = shortV && b.sub ? b.main + '  ·  ' + b.sub : b.main;
+      const bfs = shortV
+        ? Math.min(vh < 380 ? 15 : 18, vw * 0.82 / Math.max(10, line.length))
+        : Math.min(44, vw * 1.5 / Math.max(8, b.main.length));
+      const by2 = shortV ? 32 : vh * 0.3;
+      txt(line, vw / 2, by2, bfs, '#ffe9b8', 'center', 800);
       ctx.restore();
-      if (b.sub) txt(b.sub, vw / 2, vh * 0.3 + 34, 15, '#cdb', 'center', 600);
+      if (b.sub && !shortV) txt(b.sub, vw / 2, by2 + 34, 15, '#cdb', 'center', 600);
       ctx.globalAlpha = 1;
     }
     if (T.capable && G.match && G.match.over && !G.online) {
@@ -3814,7 +3859,13 @@
     }
 
     // pilot panel (mini on phones)
-    if (narrow) {
+    if (shortV) {
+      // no panel chrome, no centred energy readout — one tight column in the
+      // corner, well inside x<230 where the combat ring never reaches
+      txt(p.name + ' · ' + p.t.label, 8, 26, 10, shipColor(p, 72), 'left', 700);
+      txt('E ' + Math.max(0, p.energy | 0) + '  S ' + p.score + '  K ' + p.kills + '/' + p.deaths,
+        8, 37, 9.5, 'rgba(150,175,200,0.9)', 'left');
+    } else if (narrow) {
       panel(12, 12, 170, 40);
       txt(p.name + ' · ' + p.t.label, 20, 27, 11, shipColor(p, 70), 'left', 700);
       txt('S ' + p.score + '  B ' + p.bounty + '  K ' + p.kills + '/' + p.deaths, 20, 44, 10, '#9ab');
@@ -4159,11 +4210,12 @@
   }
 
   // the contract board: always-visible one-liners, or a full panel on J
-  function drawContracts(narrow, shift) {
+  function drawContracts(narrow, shift, shortV, boss) {
     if (!G.contracts || !G.contracts.length) return;
     const full = G.boardOpen;
-    const x = 14, w = full ? 320 : 250;
-    let y = (narrow ? 118 : 142) + (shift || 0);
+    const x = shortV ? 8 : 14, w = full ? 320 : 250;
+    // landscape: stack tight under the credits line, still left of x=230
+    let y = shortV ? (boss ? 68 : 57) : (narrow ? 118 : 142) + (shift || 0);
     if (full) {
       panel(x - 4, y - 4, w + 8, 26 + G.contracts.length * 36);
       txt('CONTRACT BOARD', x + 6, y + 13, 12, '#c8ecff', 'left', 800);
@@ -4183,9 +4235,9 @@
         txt(ct.have + '/' + ct.need, x + 6, y + 30, 9.5, '#789', 'left');
         y += 36;
       } else {
-        txt('◈ ' + def.n + ' ' + ct.have + '/' + ct.need, x + 6, y + 9, narrow ? 9.5 : 11,
+        txt('◈ ' + def.n + ' ' + ct.have + '/' + ct.need, x + 6, y + 9, shortV ? 8.5 : narrow ? 9.5 : 11,
           done ? '#8f8' : 'rgba(190,215,245,0.75)', 'left', 600);
-        y += narrow ? 13 : 15;
+        y += shortV ? 11 : narrow ? 13 : 15;
       }
     }
   }
@@ -4310,11 +4362,14 @@
   }
 
   function drawMessages() {
-    const max = T.active ? 5 : 8;
+    // landscape has no room for a chat wall: three quiet lines, small, low
+    // in the corner where the steering thumb already is
+    const shortV = vh < 540;
+    const max = shortV ? 3 : T.active ? 5 : 8;
     const start = Math.max(0, G.msgs.length - max);
     // on touch, keep the feed clear of the steer hint and clip it so long
     // lines never run underneath the weapon buttons
-    let y = T.active ? vh - 96 : vh - (G.chatOpen ? 76 : 44);
+    let y = shortV ? vh - 52 : T.active ? vh - 96 : vh - (G.chatOpen ? 76 : 44);
     ctx.save();
     if (T.active) {
       ctx.beginPath();
@@ -4324,10 +4379,10 @@
     for (let i = G.msgs.length - 1; i >= start; i--) {
       const m = G.msgs[i];
       const a = m.t > 7 ? clamp(1 - (m.t - 7) / 2, 0, 1) : 1;
-      ctx.globalAlpha = a;
-      txt(m.text, 14, y, 13, m.color, 'left', 600);
+      ctx.globalAlpha = shortV ? a * 0.75 : a;
+      txt(m.text, shortV ? 8 : 14, y, shortV ? 10 : 13, m.color, 'left', 600);
       ctx.globalAlpha = 1;
-      y -= 18;
+      y -= shortV ? 13 : 18;
     }
     ctx.restore();
   }
@@ -4736,7 +4791,10 @@
     if (d < 1200) return;                      // it's on your scanner now
     const ang = Math.atan2(dy, dx);
     // park the chevron on the screen-edge ellipse toward the target
-    const rx = vw / 2 - 54, ry = vh / 2 - 64;
+    // short screens carry side buttons and a scanner near the edges: pull the
+    // chevron's ellipse inboard so its label never lands on them
+    const short2 = vh < 540;
+    const rx = vw / 2 - (short2 ? 108 : 54), ry = vh / 2 - (short2 ? 52 : 64);
     const cx = vw / 2 + Math.cos(ang) * rx, cy = vh / 2 + Math.sin(ang) * ry;
     ctx.save();
     ctx.translate(cx, cy);
@@ -5526,7 +5584,7 @@
   }
   GLOBAL.__interstellar = {
     G, SIM, boot, startSolo, update, render, keys, handleNet, netConnect, STEP, MUS,
-    musTest, updatePlayerInput, Ttest, newSoloWorld,
+    musTest, updatePlayerInput, Ttest, newSoloWorld, banner,
     // dev/music-verify.js renders the score offline and analyzes the pixels'
     // audio equivalent: RMS continuity and clipping across section seams
     audio: { init: audioInit, musicInit, step: musScheduleStep, SFX, STEP16: MUS_STEP },

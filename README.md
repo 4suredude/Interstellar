@@ -222,12 +222,17 @@ Open `index.html` in any modern browser, pick a mode and a ship, and fly.
 ![Phone layout](assets/mobile.png)
 ![Landscape layout](assets/landscape.png)
 
-Works on **phones and tablets** too — **portrait or landscape**: the HUD
-detects a short viewport (a phone on its side is as wide as a desktop and
-as short as nothing else) and switches to the compact layout — scanner
-clear of the weapon cluster, standings folded away, and the upgrade bay
-and module hold compressing their rows to fit, dimming the fight behind
-them while open. A virtual stick appears under your left
+Works on **phones and tablets** too — **portrait or landscape**. Landscape
+is its own layout, not a squeezed desktop: your ship sits at the centre of
+a ~400px-tall view, so the **combat ring** — the annulus you actually watch
+for incoming — runs straight through the top edge, and anything wide and
+centred up there blinds you in three directions at once. So the status
+bars become **hairlines flush to the top edge**, announcements collapse to
+one compact line, the text columns hug the sides outside the ring, the
+scanner sits clear of the weapon cluster, and the thumb targets grow
+(landscape has width to spare). `dev/mobile-audit.js` measures it: the HUD
+covers **1.1% of the combat ring at rest** in landscape, with no direction
+worse than 9%. A virtual stick appears under your left
 thumb (point it where you want to fly), weapon buttons sit under your right,
 and every menu is tappable — the hosted zone is fully playable from mobile.
 
@@ -409,6 +414,7 @@ layout is saved in the browser.
 | `dev/visual.js` | Pixel assertions the sim suite structurally cannot make — bakes the real sprites in Chromium and checks hull silhouettes, the contract board, and that a frame actually paints. |
 | `dev/perf.js` | Frame-rate harness. Drives real scenes on a **pinned world seed** and measures presented frames, so an A/B compares the same terrain rather than two dice rolls. |
 | `dev/shots.js` | Screenshot capture. Every image in this README is a real frame of the real client — no mockups, no compositing. |
+| `dev/mobile-audit.js` | Renders one frame twice — world only, then world + HUD — and diffs the pixels to get the HUD's true occlusion mask, then reports what fraction of the **combat ring** around your ship is blind, per compass direction, at rest and under a full-width announcement. |
 | `dev/music-verify.js` | Renders the soundtrack's full arrangement arc through an OfflineAudioContext and asserts on the SAMPLES — no clipping, no dropouts in the groove, the drop measurably hitting harder than the calm in the bands that matter — then writes the excerpt as a WAV a human can judge. |
 
 ```sh
@@ -417,6 +423,7 @@ node dev/visual.js        # pixel-level art regressions
 node dev/perf.js          # fps per scene, desktop and phone viewports
 node dev/shots.js         # regenerate assets/*.png
 node dev/music-verify.js  # render + measure the soundtrack, write a WAV
+node dev/mobile-audit.js  # how much of the fight does the HUD cover?
 node dev/build.js         # bundle everything into interstellar.html
 ```
 
