@@ -146,7 +146,17 @@
     else if (key === 'repel') SIM.doRepel(G.W, p);
     else if (key === 'burst') SIM.doBurst(G.W, p);
     else if (key === 'spec') { if (p.t.blink) SIM.doBlink(G.W, p); else SIM.fireRocket(G.W, p); }
-    else if (key === 'warp') SIM.warpToBeacon(G.W, p);
+    else if (key === 'warp') warpKey(p);
+  }
+  // One warp key on every surface: in the zone it takes you home, in the
+  // match modes it jumps you to your squad's Comet. The touch button used to
+  // call the Comet jump in the zone too — a freelancer's warp did nothing.
+  // Success is announced by the sim's warp event; only refusals speak here.
+  function warpKey(p) {
+    if (!G.mmo) { SIM.warpToBeacon(G.W, p); return; }
+    if (SIM.warpHome(G.W, p)) return;
+    say(p.warpCd > 0 ? 'Warp drive cycling (' + Math.ceil(p.warpCd) + 's).'
+      : p.energy <= 450 ? 'Warp needs 450 energy.' : 'Already home.', '#f88');
   }
   function mobileChat() {
     let text = '';
@@ -1146,7 +1156,11 @@
         }
         case 'warp': {
           blinkFX(e.x0, e.y0, e.x1, e.y1, e.hue);
-          if (mine) say('Warped to your Comet', '#8df');
+          // the sim tags where the jump went; the zone warps used to be
+          // announced as "Warped to your Comet" because this line predates them
+          if (mine) say(e.to === 'home'
+            ? (G.player.team ? 'Warped home — the carrier has you.' : 'Warped to the contested core.')
+            : e.to === 'wp' ? 'Warped to waypoint.' : 'Warped to your Comet.', '#8df');
           if (mine && G.online) netSend({ t: 'fire', kind: 'warp', x0: e.x0, y0: e.y0, x1: e.x1, y1: e.y1, hue: e.hue });
           break;
         }
@@ -3025,10 +3039,11 @@
       ctx.globalCompositeOperation = 'source-over';
     }
     // running lights down the flanks
+    const litCol = 'hsla(' + hue + ',95%,72%,0.95)';
     for (let i = 0; i < 8; i++) {
       const lx = (-0.82 + i * 0.22) * c.r;
       const on = Math.sin(G.time * 2.6 + i * 0.9 + c.id) > 0;
-      ctx.fillStyle = on ? 'hsla(' + hue + ',95%,72%,0.95)' : 'rgba(60,70,92,0.5)';
+      ctx.fillStyle = on ? litCol : 'rgba(60,70,92,0.5)';
       const ly = (0.30 - Math.abs(i - 3.5) * 0.03) * c.r;
       ctx.fillRect(lx, ly, 3, 3);
       ctx.fillRect(lx, -ly, 3, 3);
@@ -3038,7 +3053,7 @@
     // nameplate + hull bar
     const dead = c.dead;
     if (!dead) {
-      const nm = (F ? F.name.split(' ')[0] + ' ' : '') + t.label.toUpperCase();
+      const nm = c._plate || (c._plate = (F ? F.name.split(' ')[0] + ' ' : '') + t.label.toUpperCase());
       txt(nm, c.x, c.y - c.r - 22, 12, c.boss ? 'rgba(255,150,120,0.9)' : 'rgba(150,200,255,0.85)', 'center', 800);
       const bw = c.r * 1.3, frac = clamp(c.hp / c.maxHp, 0, 1);
       ctx.fillStyle = 'rgba(0,0,0,0.5)';
@@ -3108,7 +3123,7 @@
         ctx.lineTo(ex - r * fl, eyy);
         ctx.lineTo(ex, eyy - r * 0.18);
         ctx.closePath();
-        ctx.fillStyle = 'hsla(' + (rk ? 14 : 28) + ',100%,58%,0.85)';
+        ctx.fillStyle = rk ? 'hsla(14,100%,58%,0.85)' : 'hsla(28,100%,58%,0.85)';
         ctx.fill();
         ctx.beginPath();
         ctx.moveTo(ex, eyy + r * 0.09);
@@ -3175,7 +3190,36 @@
   // ---------------------------------------------------------------- world render
   // weapon level colors: L1 red-orange, L2 yellow, L3 blue
   const BULLET_HUES = { 1: 18, 2: 52, 3: 205 };
+  const BULLET_STREAK = {}, BULLET_CORE = {};
+  for (const lv of [0, 1, 2, 3]) {
+    const h = BULLET_HUES[lv] || 46;
+    BULLET_STREAK[lv] = 'hsla(' + h + ',100%,72%,0.8)';
+    BULLET_CORE[lv] = 'hsla(' + h + ',100%,85%,1)';
+  }
   const BOMB_HUES = { 1: 4, 2: 52, 3: 210 };
+  // a bomb's core is the same gradient every frame of its life — built once
+  // per level, in the bomb's own (translated) space
+  const BOMB_CORES = {};
+  function bombCore(level, hue) {
+    let g = BOMB_CORES[level];
+    if (!g) {
+      g = ctx.createRadialGradient(0, 0, 0.5, 0, 0, 3.5 + level);
+      g.addColorStop(0, '#fff8e8');
+      g.addColorStop(1, 'hsla(' + hue + ',100%,60%,0.95)');
+      BOMB_CORES[level] = g;
+    }
+    return g;
+  }
+  // particle tints are a hue and an alpha; the alpha rides globalAlpha so
+  // one string per hue serves every particle of that color, instead of a
+  // toFixed + concat per particle per frame across a 400-particle pool
+  const SPARK_COLS = new Map(), DEBRIS_COLS = new Map();
+  function partColor(hue, cache, tail) {
+    const h = hue | 0;
+    let c = cache.get(h);
+    if (!c) { c = 'hsla(' + h + tail; cache.set(h, c); }
+    return c;
+  }
   function drawWorld() {
     const W = G.W;
     ctx.save();
@@ -3458,16 +3502,17 @@
 
     ctx.globalCompositeOperation = 'lighter';
     for (const b of W.bullets) {
-      const hue = BULLET_HUES[b.level] || 46;
+      const lv = BULLET_HUES[b.level] ? b.level : 0;
+      const hue = BULLET_HUES[lv] || 46;
       // streak
-      ctx.strokeStyle = 'hsla(' + hue + ',100%,72%,0.8)';
+      ctx.strokeStyle = BULLET_STREAK[lv];
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(b.x, b.y);
       ctx.lineTo(b.x - b.vx * 0.022, b.y - b.vy * 0.022);
       ctx.stroke();
       drawGlow(b.x, b.y, 20, hue, 0.9);
-      ctx.fillStyle = 'hsla(' + hue + ',100%,85%,1)';
+      ctx.fillStyle = BULLET_CORE[lv];
       ctx.fillRect(b.x - 1.5, b.y - 1.5, 3, 3);
     }
     for (const b of W.bombs) {
@@ -3488,10 +3533,7 @@
         ctx.lineTo(Math.cos(a) * br, Math.sin(a) * br);
       }
       ctx.stroke();
-      const core = ctx.createRadialGradient(0, 0, 0.5, 0, 0, 3.5 + b.level);
-      core.addColorStop(0, '#fff8e8');
-      core.addColorStop(1, 'hsla(' + hue + ',100%,60%,0.95)');
-      ctx.fillStyle = core;
+      ctx.fillStyle = bombCore(b.level, hue);
       ctx.beginPath();
       ctx.arc(0, 0, 3 + b.level, 0, TAU);
       ctx.fill();
@@ -3503,7 +3545,8 @@
       if (p.x < camL - 160 || p.x > camR + 160 || p.y < camT - 160 || p.y > camB + 160) continue;
       const f = clamp(p.life / p.max, 0, 1);
       if (p.kind === 'spark') {
-        ctx.strokeStyle = 'hsla(' + p.hue + ',100%,68%,' + (f * 0.9).toFixed(3) + ')';
+        ctx.globalAlpha = f * 0.9;
+        ctx.strokeStyle = partColor(p.hue, SPARK_COLS, ',100%,68%,1)');
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(p.x, p.y);
@@ -3513,7 +3556,8 @@
         ctx.save();
         ctx.translate(p.x, p.y);
         ctx.rotate(p.rot);
-        ctx.fillStyle = 'hsla(' + p.hue + ',70%,55%,' + (f * 0.85).toFixed(3) + ')';
+        ctx.globalAlpha = f * 0.85;
+        ctx.fillStyle = partColor(p.hue, DEBRIS_COLS, ',70%,55%,1)');
         ctx.beginPath();
         ctx.moveTo(p.size, 0);
         ctx.lineTo(-p.size * 0.6, p.size * 0.7);
@@ -3527,6 +3571,7 @@
         drawGlow(p.x, p.y, (p.size || 12) * (2 - f), p.hue, f * 0.5);
       }
     }
+    ctx.globalAlpha = 1;
     for (const w of G.waves) {
       const f = w.t / w.dur;
       ctx.strokeStyle = 'hsla(' + w.hue + ',100%,65%,' + ((1 - f) * 0.8).toFixed(3) + ')';
@@ -3614,6 +3659,7 @@
 
   // CONTACT markers + hunt compass: encounters are events, and deep space
   // always offers a heading toward the next one
+  const BRACKET_CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
   function drawContacts() {
     const p = G.player;
     if (!p || p.dead) return;
@@ -3629,7 +3675,8 @@
         // on screen: corner brackets around the hostile
         const r = 26 + fx.t * 6, k = 9;
         ctx.beginPath();
-        for (const [ux, uy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+        for (const q of BRACKET_CORNERS) {
+          const ux = q[0], uy = q[1];
           ctx.moveTo(sx + ux * r, sy + uy * (r - k));
           ctx.lineTo(sx + ux * r, sy + uy * r);
           ctx.lineTo(sx + ux * (r - k), sy + uy * r);
@@ -3680,6 +3727,7 @@
     }
   }
 
+  let ebarG = null;   // cached energy-bar gradient: {key, g}
   function drawHUD() {
     const p = G.player;
     if (!p) return;
@@ -3780,16 +3828,21 @@
     if (!shortV) panel(bx - 5, by - 5, bw + 10, 27);
     ctx.fillStyle = 'rgba(255,255,255,0.05)';
     ctx.fillRect(bx, by, bw, ebh);
-    const bg = ctx.createLinearGradient(bx, 0, bx + bw, 0);
-    if (frac > 0.5) { bg.addColorStop(0, 'rgba(60,190,255,0.95)'); bg.addColorStop(1, 'rgba(120,255,230,0.95)'); }
-    else if (frac > 0.25) { bg.addColorStop(0, 'rgba(255,180,60,0.95)'); bg.addColorStop(1, 'rgba(255,230,110,0.95)'); }
-    else {
-      const fl = 0.7 + 0.3 * Math.sin(G.time * 12);
-      bg.addColorStop(0, 'rgba(255,70,60,' + fl.toFixed(3) + ')');
-      bg.addColorStop(1, 'rgba(255,130,90,' + fl.toFixed(3) + ')');
+    // three gradients, rebuilt only when the bar moves or changes state —
+    // not a fresh CanvasGradient every frame for the same 380px strip
+    const tier = frac > 0.5 ? 2 : frac > 0.25 ? 1 : 0;
+    const gkey = (tier * 8192 + bw) * 8192 + bx;
+    if (!ebarG || ebarG.key !== gkey) {
+      const g = ctx.createLinearGradient(bx, 0, bx + bw, 0);
+      if (tier === 2) { g.addColorStop(0, 'rgba(60,190,255,0.95)'); g.addColorStop(1, 'rgba(120,255,230,0.95)'); }
+      else if (tier === 1) { g.addColorStop(0, 'rgba(255,180,60,0.95)'); g.addColorStop(1, 'rgba(255,230,110,0.95)'); }
+      else { g.addColorStop(0, 'rgba(255,70,60,1)'); g.addColorStop(1, 'rgba(255,130,90,1)'); }
+      ebarG = { key: gkey, g };
     }
-    ctx.fillStyle = bg;
+    ctx.fillStyle = ebarG.g;
+    if (tier === 0) ctx.globalAlpha = 0.7 + 0.3 * Math.sin(G.time * 12);   // the low-energy throb
     ctx.fillRect(bx, by, bw * frac, ebh);
+    ctx.globalAlpha = 1;
     ctx.fillStyle = 'rgba(4,8,18,0.55)';
     for (let i = 1; i < 10; i++) ctx.fillRect(bx + bw * i / 10 - 0.5, by, 1, ebh);
     if (frac > 0.02) {
@@ -3983,6 +4036,52 @@
   // Local-window radar, like the original's: it scans the space around you,
   // not the whole sector. A contact sliding in from the edge is something you
   // chase — or something coming for you.
+  // The scanner's terrain was a live walk over the sparse tile field — some
+  // 7,400 samples and rect calls a frame, for a picture that shifts a pixel
+  // or two between frames. It bakes into a window with a margin now and is
+  // re-walked only when the view runs off the baked area: about twice a
+  // second at full burn, never while holding position.
+  const RADAR_PAD = 24;                 // radar px of slack on every side
+  let radarBake = null;                 // {c, g, R, step, bx, by, span, tiles}
+  function radarTerrain(rx, ry, R, wx, wy, RW) {
+    const step = RW / R;                // world px per radar px
+    let B = radarBake;
+    const stale = !B || B.R !== R || B.tiles !== G.W.tiles || B.step !== step ||
+      wx < B.bx || wy < B.by || wx + RW > B.bx + B.span || wy + RW > B.by + B.span;
+    if (stale) {
+      const size = R + RADAR_PAD * 2;
+      if (!B || B.R !== R) {
+        const c = GLOBAL.document.createElement('canvas');
+        c.width = size; c.height = size;
+        B = radarBake = { c, g: c.getContext('2d'), R, step: 0, bx: 0, by: 0, span: 0, tiles: null };
+      }
+      B.step = step; B.span = size * step; B.tiles = G.W.tiles;
+      // origin snapped to whole radar pixels so the blit lands on integers
+      B.bx = Math.floor((wx - RADAR_PAD * step) / step) * step;
+      B.by = Math.floor((wy - RADAR_PAD * step) / step) * step;
+      // row-local chunk cache (consecutive samples share sparse chunks) and
+      // one batched fill instead of thousands of fillRects
+      const g = B.g, tiles = B.tiles;
+      const TCH = 64, TCHROW = Math.ceil(MAPS / TCH);
+      let ck = -1, carr = null;
+      g.clearRect(0, 0, size, size);
+      g.fillStyle = '#41639f';
+      g.beginPath();
+      for (let py = 0; py < size; py += 2) {
+        const ty = ((B.by + py * step) / TILE) | 0;
+        const cyk = (ty / TCH) | 0, tyi = (ty % TCH) * TCH;
+        for (let px = 0; px < size; px += 2) {
+          const tx = ((B.bx + px * step) / TILE) | 0;
+          if (tx < 2 || ty < 2 || tx >= MAPS - 2 || ty >= MAPS - 2) { g.rect(px, py, 2, 2); continue; }
+          const k = ((tx / TCH) | 0) * TCHROW + cyk;
+          if (k !== ck) { ck = k; carr = tiles.get(k); }
+          if (carr && carr[tyi + (tx % TCH)]) g.rect(px, py, 2, 2);
+        }
+      }
+      g.fill();
+    }
+    ctx.drawImage(B.c, rx + Math.round((B.bx - wx) / step), ry + Math.round((B.by - wy) / step));
+  }
   const RADAR_RANGE = 3600; // world px covered by the radar square
   function drawRadar(rx, ry, R) {
     panel(rx - 5, ry - 5, R + 10, R + 10);
@@ -3994,29 +4093,7 @@
     ctx.beginPath();
     ctx.rect(rx, ry, R, R);
     ctx.clip();
-    // sample the sparse tile field live across the scanner window — with a
-    // row-local chunk cache (consecutive samples share sparse chunks) and
-    // one batched fill instead of thousands of fillRects
-    {
-      const step = RW / R;               // world px per radar px
-      const TCH = 64, TCHROW = Math.ceil(MAPS / TCH);
-      const tiles = G.W.tiles;
-      let ck = -1, carr = null;
-      ctx.fillStyle = '#41639f';
-      ctx.beginPath();
-      for (let py = 0; py < R; py += 2) {
-        const ty = ((wy + py * step) / TILE) | 0;
-        const cyk = (ty / TCH) | 0, tyi = (ty % TCH) * TCH;
-        for (let px = 0; px < R; px += 2) {
-          const tx = ((wx + px * step) / TILE) | 0;
-          if (tx < 2 || ty < 2 || tx >= MAPS - 2 || ty >= MAPS - 2) { ctx.rect(rx + px, ry + py, 2, 2); continue; }
-          const k = ((tx / TCH) | 0) * TCHROW + cyk;
-          if (k !== ck) { ck = k; carr = tiles.get(k); }
-          if (carr && carr[tyi + (tx % TCH)]) ctx.rect(rx + px, ry + py, 2, 2);
-        }
-      }
-      ctx.fill();
-    }
+    radarTerrain(rx, ry, R, wx, wy, RW);
     ctx.strokeStyle = 'rgba(70,120,200,0.18)';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -4645,15 +4722,34 @@
     try { GLOBAL.localStorage.setItem('interstellar-name', n); } catch (e) { }
   }
   function loadMMO() {
-    try {
-      const d = JSON.parse(GLOBAL.localStorage.getItem('interstellar-mmo') || '{}');
-      G.credits = d.c | 0; G.relics = d.r | 0; G.upg = d.u || {}; G.zoneTeam = d.sq | 0;
-      G.contracts = Array.isArray(d.ct) ? d.ct : [];
-      G.charted = Array.isArray(d.ch) ? d.ch : [];
-      G.hold = Array.isArray(d.hd) ? d.hd : [];
-      G.eqp = Array.isArray(d.eq) ? d.eq : [];
-      G.waypoint = d.wp && isFinite(d.wp.x) && isFinite(d.wp.y) ? { x: +d.wp.x, y: +d.wp.y } : null;
-    } catch (e) { G.credits = 0; G.relics = 0; G.upg = {}; G.contracts = []; G.charted = []; G.hold = []; G.eqp = []; }
+    // this is player-writable storage: a hand-edited or half-written record
+    // must degrade to defaults, never to a hold entry with an unknown rarity
+    // that throws inside the render loop every frame from then on
+    let d = null;
+    try { d = JSON.parse(GLOBAL.localStorage.getItem('interstellar-mmo') || '{}'); } catch (e) { }
+    if (!d || typeof d !== 'object') d = {};
+    const int = (v, lo, hi) => clamp(Number.isFinite(+v) ? Math.trunc(+v) : 0, lo, hi);   // no |0 wrap on huge values
+    const okItem = it => it && typeof it === 'object' && SIM.MODULES.some(m => m.k === it.k) &&
+      it.r === (it.r | 0) && it.r >= 0 && it.r < SIM.RARITIES.length && Number.isFinite(+it.p);
+    const items = (a, n) => Array.isArray(a)
+      ? a.filter(okItem).slice(0, n).map(it => ({ k: it.k, r: it.r, p: clamp(+it.p, 0.5, 1.5) })) : [];
+    G.credits = int(d.c, 0, 1e9); G.relics = int(d.r, 0, 1e6); G.zoneTeam = int(d.sq, 0, 4);
+    G.upg = {};
+    if (d.u && typeof d.u === 'object') for (const U of UPGRADES) {
+      const l = int(d.u[U.k], 0, U.max);
+      if (l) G.upg[U.k] = l;
+    }
+    G.contracts = Array.isArray(d.ct)
+      ? d.ct.filter(ct => ct && typeof ct === 'object' && CONTRACTS.some(c => c.k === ct.k) && (ct.need | 0) > 0)
+        .slice(0, 3).map(ct => ({ k: ct.k, need: ct.need | 0, have: int(ct.have, 0, ct.need | 0), pay: int(ct.pay, 0, 1e6) }))
+      : [];
+    const NQ = SIM.GRID * SIM.GRID;
+    G.charted = Array.isArray(d.ch) ? d.ch.filter(q => q === (q | 0) && q >= 0 && q < NQ).slice(0, NQ) : [];
+    G.hold = items(d.hd, 8);
+    // one mount per module kind is the equip rule; enforce it on load too
+    G.eqp = items(d.eq, 3).filter((it, i, a) => a.findIndex(o => o.k === it.k) === i);
+    G.waypoint = d.wp && Number.isFinite(+d.wp.x) && Number.isFinite(+d.wp.y)
+      ? { x: clamp(+d.wp.x, 0, WORLD), y: clamp(+d.wp.y, 0, WORLD) } : null;
   }
   function saveMMO() {
     try {
@@ -5354,12 +5450,7 @@
       if (isAct(code, 'repel')) SIM.doRepel(G.W, p);
       else if (isAct(code, 'burst')) SIM.doBurst(G.W, p);
       else if (isAct(code, 'special')) { if (p.t.blink) SIM.doBlink(G.W, p); else SIM.fireRocket(G.W, p); }
-      else if (isAct(code, 'warp')) {
-        if (G.mmo) {
-          if (SIM.warpHome(G.W, p)) say(p.team ? 'Warped home — the carrier has you.' : 'Warped to the contested core.', '#8df');
-          else say(p.warpCd > 0 ? 'Warp drive cycling (' + Math.ceil(p.warpCd) + 's).' : p.energy <= 450 ? 'Warp needs 450 energy.' : 'Already home.', '#f88');
-        } else SIM.warpToBeacon(G.W, p);
-      }
+      else if (isAct(code, 'warp')) warpKey(p);
       else if (isAct(code, 'wayp') && G.mmo) {
         if (e.shiftKey || !G.waypoint) {
           G.waypoint = { x: Math.round(p.x), y: Math.round(p.y) };
@@ -5367,9 +5458,7 @@
           say('Waypoint set — ' + bindLabel('wayp') + ' warps back here.', '#8df');
         } else if (Math.hypot(p.x - G.waypoint.x, p.y - G.waypoint.y) < 900) {
           say('Already at the waypoint — Shift+' + bindLabel('wayp') + ' moves it here.', '#89a');
-        } else if (SIM.warpTo(G.W, p, G.waypoint.x, G.waypoint.y)) {
-          say('Warped to waypoint.', '#8df');
-        } else {
+        } else if (!SIM.warpTo(G.W, p, G.waypoint.x, G.waypoint.y)) {
           say(p.warpCd > 0 ? 'Warp drive cycling (' + Math.ceil(p.warpCd) + 's).' : 'Warp needs 450 energy.', '#f88');
         }
       }

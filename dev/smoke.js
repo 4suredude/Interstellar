@@ -308,6 +308,38 @@ const SIM = require(path.join(ROOT, 'sim.js'));
     console.log('OK  loot: rarity ladder drops, pickup, stat hooks, Zone-only');
   }
 
+  // travel: warp home and the personal waypoint — real energy, a real
+  // cooldown, no hopping across the room, and the event says WHERE you went
+  // (the client's "Warped to your Comet" line was firing for all three)
+  {
+    const Wt = SIM.createWorld({ seed: 4242, spawnPrizes: true, zoneWorld: true, authority: true });
+    const s = SIM.makeShip(Wt, 'corsair', 'local', 'Nomad', null, 0);
+    SIM.spawnShip(Wt, s);
+    const C = SIM.WORLD / 2;
+    s.energy = s.maxEnergy; s.warpCd = 0;
+    s.x = C + 30000; s.y = C + 30000;   // a freelancer deep in the frontier
+    SIM.drainEvents(Wt);
+    assert(SIM.warpHome(Wt, s), 'a freelancer can warp to the contested core');
+    let ev = SIM.drainEvents(Wt).filter(e => e.e === 'warp');
+    assert(ev.length === 1 && ev[0].to === 'home', 'warp event is tagged home');
+    assert(Math.hypot(s.x - C, s.y - C) < 1200 && finiteShip(s),
+      'and lands at the core (' + Math.round(Math.hypot(s.x - C, s.y - C)) + 'px out)');
+    assert(s.warpCd > 0 && s.energy < s.maxEnergy - 400 && !SIM.warpHome(Wt, s), 'the jump costs energy and the drive cycles');
+    s.warpCd = 0; s.energy = s.maxEnergy; s.x = C; s.y = C;
+    assert(!SIM.warpHome(Wt, s), 'already home: refused');
+    assert(!SIM.warpTo(Wt, s, s.x + 100, s.y + 100), 'a waypoint under 900px is a flight, not a jump');
+    const tx = C - 20000, ty = C + 12000;
+    assert(SIM.warpTo(Wt, s, tx, ty), 'a far waypoint is a valid jump');
+    ev = SIM.drainEvents(Wt).filter(e => e.e === 'warp');
+    assert(ev.length === 1 && ev[0].to === 'wp', 'waypoint warp event is tagged wp');
+    assert(Math.hypot(s.x - tx, s.y - ty) < 600 && finiteShip(s), 'and lands beside it');
+    s.warpCd = 0; s.energy = 100;
+    assert(!SIM.warpTo(Wt, s, C, C), 'no energy, no jump');
+    s.energy = s.maxEnergy;
+    assert(!SIM.warpTo(Wt, s, Infinity, NaN) && finiteShip(s), 'non-finite targets are refused');
+    console.log('OK  travel: warp home + waypoint burn energy, cycle, refuse short hops');
+  }
+
   // capitals vs the world: bombs fuse on hulls, patrols never cross walls
   {
     const Wc = SIM.createWorld({ seed: 777, spawnPrizes: false, zoneWorld: true, authority: true });

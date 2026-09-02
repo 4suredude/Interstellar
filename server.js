@@ -68,12 +68,40 @@ const httpServer = http.createServer((req, res) => {
   const file = path.normalize(path.join(ROOT, urlPath));
   // real path-prefix test, not a string prefix (blocks sibling dirs like Ss.bak)
   if (file !== ROOT && !file.startsWith(ROOT + path.sep)) { res.writeHead(403); res.end(); return; }
-  fs.readFile(file, (err, data) => {
-    if (err) { res.writeHead(404); res.end('not found'); return; }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff' });
-    res.end(data);
-  });
+  serveStatic(req, res, file);
 });
+// Static files are read once and served from memory under a content ETag.
+// A deploy changes the bytes (so the tag), and a returning browser then
+// revalidates with a 304 instead of pulling the 700KB bundle every visit.
+// The mtime/size check keeps a live-edited file honest without a restart.
+const staticCache = new Map();   // file -> {mtimeMs, size, data, etag, type}
+function serveStatic(req, res, file) {
+  fs.stat(file, (err, st) => {
+    if (err || !st.isFile()) { res.writeHead(404); res.end('not found'); return; }
+    const hit = staticCache.get(file);
+    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) { sendStatic(req, res, hit); return; }
+    fs.readFile(file, (err2, data) => {
+      if (err2) { res.writeHead(404); res.end('not found'); return; }
+      const ent = {
+        mtimeMs: st.mtimeMs, size: st.size, data,
+        etag: '"' + crypto.createHash('sha1').update(data).digest('base64').slice(0, 27) + '"',
+        type: MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
+      };
+      staticCache.set(file, ent);
+      sendStatic(req, res, ent);
+    });
+  });
+}
+function sendStatic(req, res, ent) {
+  const headers = {
+    'Content-Type': ent.type, 'ETag': ent.etag, 'Cache-Control': 'no-cache',
+    'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
+  };
+  if (req.headers['if-none-match'] === ent.etag) { res.writeHead(304, headers); res.end(); return; }
+  headers['Content-Length'] = ent.data.length;
+  res.writeHead(200, headers);
+  res.end(req.method === 'HEAD' ? undefined : ent.data);
+}
 httpServer.maxConnections = 800;
 // last-resort backstop: never let one bad packet take the zone down
 process.on('uncaughtException', e => { try { log('uncaught: ' + (e && e.stack || e)); } catch (_) { } });
@@ -626,6 +654,10 @@ function onCommand(cl, line) {
 
 const HAS = Object.prototype.hasOwnProperty;
 const hyp2 = (a, b) => a * a + b * b;
+// `+x || 0` stops NaN but waves Infinity through — and one Infinity in a
+// relayed coordinate poisons every peer's math for that ship
+const num0 = v => { v = +v; return Number.isFinite(v) ? v : 0; };
+const numc = (v, lim) => SIM.clamp(num0(v), -lim, lim);
 const FIRE_GAP = { gun: 110, bomb: 950, burst: 750, repel: 650, blink: 3200, warp: 8000, worm: 1500 };
 // per-client token bucket: bounds chat/command/relic/prize flooding
 function msgAllowed(cl) {
@@ -722,7 +754,7 @@ function onMessage(cl, msg) {
       s.netY = SIM.clamp(+msg.y || 0, 0, SIM.WORLD);
       s.netVx = SIM.clamp(+msg.vx || 0, -MAX_REPORT_SPEED, MAX_REPORT_SPEED);
       s.netVy = SIM.clamp(+msg.vy || 0, -MAX_REPORT_SPEED, MAX_REPORT_SPEED);
-      s.netA = +msg.a || 0; s.netT = 0;
+      s.netA = num0(msg.a); s.netT = 0;
       s.dead = !!msg.d;
       s.netFrac = SIM.clamp(+msg.f || 0, 0, 1);
       s.netTh = msg.th ? 1 : 0;
@@ -764,7 +796,8 @@ function onMessage(cl, msg) {
         SIM.injectBomb(W, s, msg);
       } else if (msg.kind === 'burst') {
         if (!near(msg.x, msg.y)) return;
-        relay = { t: 'fire', kind: 'burst', id: cl.id, x: +msg.x, y: +msg.y, vx: +msg.vx || 0, vy: +msg.vy || 0, radius: SIM.clamp(+msg.radius || 90, 0, 200) };
+        relay = { t: 'fire', kind: 'burst', id: cl.id, x: +msg.x, y: +msg.y, vx: numc(msg.vx, 1500), vy: numc(msg.vy, 1500), radius: SIM.clamp(num0(msg.radius) || 90, 0, 200) };
+        msg.vx = relay.vx; msg.vy = relay.vy; msg.radius = relay.radius;
         SIM.injectBurst(W, s, msg);
       } else if (msg.kind === 'repel') {
         if (!near(msg.x, msg.y)) return;
@@ -772,8 +805,9 @@ function onMessage(cl, msg) {
         SIM.injectRepel(W, s, msg);
       } else {
         // blink / warp are FX-only; whitelist their endpoints too
+        const wc = v => SIM.clamp(num0(v), 0, SIM.WORLD);
         relay = { t: 'fire', kind: msg.kind, id: cl.id,
-          x0: +msg.x0 || 0, y0: +msg.y0 || 0, x1: +msg.x1 || 0, y1: +msg.y1 || 0, hue: +msg.hue || s.hue };
+          x0: wc(msg.x0), y0: wc(msg.y0), x1: wc(msg.x1), y1: wc(msg.y1), hue: SIM.clamp(num0(msg.hue), 0, 360) || s.hue };
       }
       broadcast(relay, cl);
       break;

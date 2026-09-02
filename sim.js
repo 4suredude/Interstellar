@@ -1443,7 +1443,7 @@
     const x0 = s.x, y0 = s.y;
     s.x = p.x; s.y = p.y;
     s.vx = best.vx; s.vy = best.vy;
-    ev(W, { e: 'warp', id: s.id, x0, y0, x1: s.x, y1: s.y, hue: s.hue });
+    ev(W, { e: 'warp', id: s.id, x0, y0, x1: s.x, y1: s.y, hue: s.hue, to: 'beacon' });
     return true;
   }
 
@@ -1462,7 +1462,7 @@
     s.energy -= 450; s.warpCd = 25; s.safe = Math.max(s.safe, 1.5);
     const x0 = s.x, y0 = s.y;
     s.x = p.x; s.y = p.y; s.vx = 0; s.vy = 0;
-    ev(W, { e: 'warp', id: s.id, x0, y0, x1: s.x, y1: s.y, hue: s.hue });
+    ev(W, { e: 'warp', id: s.id, x0, y0, x1: s.x, y1: s.y, hue: s.hue, to: 'home' });
     return true;
   }
   function warpTo(W, s, x, y) {
@@ -1476,7 +1476,7 @@
     s.energy -= 450; s.warpCd = 25; s.safe = Math.max(s.safe, 1.5);
     const x0 = s.x, y0 = s.y;
     s.x = p.x; s.y = p.y; s.vx = 0; s.vy = 0;
-    ev(W, { e: 'warp', id: s.id, x0, y0, x1: s.x, y1: s.y, hue: s.hue });
+    ev(W, { e: 'warp', id: s.id, x0, y0, x1: s.x, y1: s.y, hue: s.hue, to: 'wp' });
     return true;
   }
 
@@ -1698,7 +1698,7 @@
   function updateShip(W, s, dt) {
     // docked: parked inside your carrier's bay, safe, refitting fast
     if (s.docked) {
-      const c = (W.capitals || []).find(k => k.id === s.docked);
+      const c = W.capitals ? W.capitals.find(k => k.id === s.docked) : null;
       if (!c || c.dead) { s.docked = 0; }
       else {
         s.x = c.x - Math.cos(c.angle) * c.r * 0.35;
@@ -1855,11 +1855,15 @@
   }
 
   // ------------------------------------------------------------ projectiles
+  // bullets are the one list that gets long (a brawl runs hundreds), and
+  // nothing depends on their order — swap-pop instead of a head splice that
+  // memmoves the whole array for every expired round
+  function swapPop(arr, i) { arr[i] = arr[arr.length - 1]; arr.pop(); }
   function updateBullets(W, dt) {
     for (let i = W.bullets.length - 1; i >= 0; i--) {
       const b = W.bullets[i];
       b.life -= dt;
-      if (b.life <= 0) { W.bullets.splice(i, 1); continue; }
+      if (b.life <= 0) { swapPop(W.bullets, i); continue; }
       let dead = false;
       const h = dt / 2;
       for (let step = 0; step < 2 && !dead; step++) {
@@ -1893,7 +1897,7 @@
           }
         }
       }
-      if (dead) W.bullets.splice(i, 1);
+      if (dead) swapPop(W.bullets, i);
     }
   }
 
