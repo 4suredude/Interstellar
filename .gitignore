@@ -1,1 +1,3 @@
 data/
+# music-verify renders its listening excerpt here (10+ MB, regenerated on every run)
+dev/music-excerpt.wav
