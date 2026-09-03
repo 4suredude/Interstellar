@@ -25,7 +25,8 @@ All of it plays out across **endless space**: a 7×7 lattice of quadrants
 minutes of hypersonic flight to cross. The tile field is stored
 *sparsely* (space is ~99.5% empty, so only chunks containing built
 structure exist in memory — 3.5MB where a dense map would take 49MB),
-which makes the world size nearly free; the radar samples it live.
+which makes the world size nearly free; the radar bakes its scanner window
+from it and re-walks only when the view runs off the baked margin.
 **The center quadrant is the contested core**; the four corners belong
 to the squads; everything between is frontier, charted by bearing and
 grid reference ("ENTERING THE SOUTHWEST FRONTIER · B6"). Most quadrants
@@ -213,8 +214,12 @@ state instead of JSON), a **jitter buffer** that renders remote ships ~100 ms
 in the past and interpolates between timestamped snapshots — with capped
 extrapolation on packet loss, so ships glide instead of teleporting — plus
 server-side sanity validation (position/speed clamps, per-weapon fire-rate
-caps, damage caps, death-spam guards). Bots **back-fill**: they stand down
-as humans join and rejoin as the zone empties.
+caps, damage caps, death-spam guards). Every relayed number is
+finite-checked and clamped — `Infinity` is refused, not just `NaN`, because
+one infinite coordinate would poison every peer's math for that ship — and
+no client message is ever forwarded as-is: the server rebuilds an explicit
+frame per message kind. Bots **back-fill**: they stand down as humans join
+and rejoin as the zone empties.
 
 ## Play solo (no install)
 
@@ -261,6 +266,14 @@ blue or red. Configuration is all environment variables:
 PORT=9000 BOTS=6 GOAL=50 MODE=teams|core|ffa MAP=nexus|gauntlet|rings \
 DISCORD_WEBHOOK=https://discord.com/api/webhooks/... node server.js
 ```
+
+More knobs: `DATA_DIR` moves the pilot database (default `./data`),
+`ALLOW_ORIGIN=https://your.site` refuses WebSocket upgrades from other
+pages, `IP_MAX` caps connections per address (default 8). The server serves
+exactly the game files — never `server.js`, the pilot DB, or `.git` — from
+memory under a content ETag with `Cache-Control: no-cache`, so a returning
+browser revalidates with a 304 instead of re-downloading the bundle, and a
+deploy is picked up on the next load because the bytes (and the tag) changed.
 
 A different server can be targeted with `?server=host:port` in the URL. The
 architecture is an owner-trusting relay: each client owns its ship, the
@@ -453,12 +466,33 @@ Measured on one pinned world, presented frames, before → after:
 | 14-ship brawl | 38.3 → **56.4** fps | 88.6 → **128.9** fps |
 | Under a carrier | 34.8 → **46.5** fps | 107.4 → **146.2** fps |
 
+A later scrub pass went after what the frame *allocates* rather than what
+it draws. The radar's terrain was a live walk over the sparse tile field —
+some 7,400 samples and rect calls every frame for a picture that shifts a
+pixel between frames — and now bakes into a padded window that re-walks
+only when the view runs off it (about twice a second at full burn, never
+while holding position). Bullet, particle, ship-flame and capital-light
+tints are cached strings with the alpha riding `globalAlpha` instead of a
+`toFixed` + concat per particle; bomb cores and the energy bar reuse their
+gradients instead of building a `CanvasGradient` per object per frame; and
+expired bullets swap-pop out of the list instead of head-splicing it. The
+radar change is an algorithmic win; the rest is GC-pressure work, and an
+A/B of identical 400-particle / 200-bullet frames landed within this
+container's CPU noise, so no frame-time number is claimed for it.
+
 ## Roadmap
 
 Ordered by what actually blocks what, from a full review of the codebase.
 
 ### Near term — correctness and trust
 
+- **Server-held economy.** Credits, upgrades, the hold and the equipped
+  modules live in the browser's localStorage. They are validated for
+  *shape* on load (an unknown rarity or a wrapped integer can no longer
+  crash the renderer or mint a negative bank), not for honesty — a pilot
+  can edit their own credits. Online, the pilot database already holds
+  identity behind a callsign token; moving the ledger beside it is the next
+  trust step, and the online drop relay below is its natural first tenant.
 - **Online module drops.** Loot currently drops in Zone worlds (the solo
   MMO); the online zone needs a drop+/loot relay with the same proximity
   validation the relic path already uses.
@@ -510,9 +544,12 @@ Ordered by what actually blocks what, from a full review of the codebase.
 ### Known limits, accepted deliberately
 
 - The netcode trusts each client about its own ship (SubSpace's own model).
-  Server-side sanity caps bound speed, fire rate, damage, and kill claims,
-  but a modified client can still fly dishonestly. Full server authority is
-  a different game architecture, not a patch.
+  Server-side sanity caps bound speed, fire rate, damage, kill claims and
+  the numeric range of everything relayed, but a modified client can still
+  fly dishonestly. Full server authority is a different game architecture,
+  not a patch.
+- `dev/music-verify.js` writes its 10 MB listening excerpt beside itself;
+  it is git-ignored, regenerated on every run, and not source.
 - `interstellar.html` is a build artifact committed for zero-setup play;
   it regenerates via `node dev/build.js`.
 - Perf numbers in this README come from software rasterization in CI-class
